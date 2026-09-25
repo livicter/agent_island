@@ -25,16 +25,22 @@
 
   // ---------- internal state ----------
   var renderer, scene, camera, container;
-  var sunLight, hemiLight, ambLight;
+  var sunLight, moonLight, hemiLight, ambLight;
   var skyMat, starMat, sunSprite, moonSprite;
   var waterMesh, waterGeo;
   var clouds = [];            // sprite group
   var rain = null;            // Points
+  var fireflies = null;       // Points (night)
+  var fireflyBase = null, fireflyPhase = null;
   var lamps = [];             // { meshMat, glowMat }
+  var lampLights = [];        // real PointLights (first few lamps only)
   var windows = [];           // emissive window materials
   var labelSprites = [];
   var agents = {};            // id -> { group, ringMat, nameSprite, phase, status, heading }
   var weatherMode = 'Clear';
+  var nightF = 0;             // 0 = full day, 1 = full night (set by applyTimeOfDay)
+  var sunF = 1;               // 0 = sun down, 1 = full day sun (set by applyTimeOfDay)
+  var starBase = 0;           // base star opacity from palette (twinkle modulates it)
   var overview = false;
 
   var cam = { yaw: 0.85, pitch: 0.55, dist: 72, tx: 0, ty: 2, tz: 0 };
@@ -103,6 +109,32 @@
     return new THREE.CanvasTexture(c);
   }
 
+  function makeMoonTexture() {
+    var c = makeCanvas(256, 256);
+    var ctx = c.getContext('2d');
+    // soft halo
+    var halo = ctx.createRadialGradient(128, 128, 40, 128, 128, 126);
+    halo.addColorStop(0, 'rgba(190,210,245,0.35)');
+    halo.addColorStop(1, 'rgba(150,170,220,0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, 256, 256);
+    // bright disc
+    var disc = ctx.createRadialGradient(112, 108, 10, 128, 128, 62);
+    disc.addColorStop(0, '#ffffff');
+    disc.addColorStop(0.75, '#e8eefb');
+    disc.addColorStop(1, '#c3cfe8');
+    ctx.fillStyle = disc;
+    ctx.beginPath(); ctx.arc(128, 128, 58, 0, 7); ctx.fill();
+    // craters
+    ctx.fillStyle = 'rgba(160,175,205,0.55)';
+    [[108, 116, 11], [142, 140, 8], [126, 152, 6], [148, 108, 5], [114, 142, 4]].forEach(function (k) {
+      ctx.beginPath(); ctx.arc(k[0], k[1], k[2], 0, 7); ctx.fill();
+    });
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.beginPath(); ctx.arc(104, 100, 16, 0, 7); ctx.fill();
+    return new THREE.CanvasTexture(c);
+  }
+
   function makeCloudTexture() {
     var c = makeCanvas(256, 128);
     var ctx = c.getContext('2d');
@@ -118,17 +150,20 @@
   }
 
   // ---------- time-of-day palettes ----------
-  // keyframes across the 24h cycle; interpolated with wrap-around
+  // keyframes across the 24h cycle; interpolated with wrap-around.
+  // sun: directional sun intensity factor, moon: cool moonlight factor,
+  // sunColor: tint of the sun light (warm at dawn/dusk).
   var TOD_KEYS = [
-    { h: 0.0, skyTop: '#04060e', skyBot: '#0d1428', fog: '#0a0f22', sun: 0.00, hemi: 0.28, amb: 0.30, lamp: 1.0, star: 1.0, water: '#0a1a33' },
-    { h: 4.5, skyTop: '#04060e', skyBot: '#0d1428', fog: '#0a0f22', sun: 0.00, hemi: 0.28, amb: 0.30, lamp: 1.0, star: 1.0, water: '#0a1a33' },
-    { h: 6.0, skyTop: '#2c4a7c', skyBot: '#f2a35e', fog: '#c9a184', sun: 0.55, hemi: 0.50, amb: 0.45, lamp: 0.6, star: 0.0, water: '#2a5a8c' },
-    { h: 7.5, skyTop: '#3f7fd4', skyBot: '#bfe0f2', fog: '#cfd9e2', sun: 1.00, hemi: 0.65, amb: 0.55, lamp: 0.0, star: 0.0, water: '#2f7fc4' },
-    { h: 16.5, skyTop: '#3a78d8', skyBot: '#b8dcf0', fog: '#ccd8e2', sun: 1.05, hemi: 0.65, amb: 0.55, lamp: 0.0, star: 0.0, water: '#2f7fc4' },
-    { h: 18.0, skyTop: '#3d4a86', skyBot: '#f29a4e', fog: '#d8a077', sun: 0.60, hemi: 0.50, amb: 0.45, lamp: 0.5, star: 0.0, water: '#2a5a8c' },
-    { h: 19.5, skyTop: '#1c2a55', skyBot: '#5a6fa0', fog: '#5a6c92', sun: 0.18, hemi: 0.38, amb: 0.36, lamp: 0.9, star: 0.35, water: '#16345f' },
-    { h: 21.0, skyTop: '#04060e', skyBot: '#0d1428', fog: '#0a0f22', sun: 0.00, hemi: 0.28, amb: 0.30, lamp: 1.0, star: 1.0, water: '#0a1a33' },
-    { h: 24.0, skyTop: '#04060e', skyBot: '#0d1428', fog: '#0a0f22', sun: 0.00, hemi: 0.28, amb: 0.30, lamp: 1.0, star: 1.0, water: '#0a1a33' }
+    { h: 0.0,  skyTop: '#030509', skyBot: '#0b1226', fog: '#090e20', sun: 0.00, moon: 0.50, sunColor: '#fff2dd', hemi: 0.14, amb: 0.16, lamp: 1.0, star: 1.0, water: '#081426' },
+    { h: 4.5,  skyTop: '#030509', skyBot: '#0b1226', fog: '#090e20', sun: 0.00, moon: 0.50, sunColor: '#fff2dd', hemi: 0.14, amb: 0.16, lamp: 1.0, star: 1.0, water: '#081426' },
+    { h: 5.75, skyTop: '#27436f', skyBot: '#e88b52', fog: '#bd9077', sun: 0.35, moon: 0.22, sunColor: '#ff9e58', hemi: 0.26, amb: 0.24, lamp: 0.8, star: 0.15, water: '#1d4a72' },
+    { h: 7.5,  skyTop: '#3f7fd4', skyBot: '#bfe0f2', fog: '#cfd9e2', sun: 1.00, moon: 0.00, sunColor: '#fff4e0', hemi: 0.22, amb: 0.18, lamp: 0.0, star: 0.0, water: '#2f7fc4' },
+    { h: 16.5, skyTop: '#3a78d8', skyBot: '#b8dcf0', fog: '#ccd8e2', sun: 1.05, moon: 0.00, sunColor: '#fff6e8', hemi: 0.22, amb: 0.18, lamp: 0.0, star: 0.0, water: '#2f7fc4' },
+    { h: 17.75, skyTop: '#4a5a9e', skyBot: '#f7a24e', fog: '#d99a6e', sun: 0.62, moon: 0.04, sunColor: '#ff9e58', hemi: 0.40, amb: 0.34, lamp: 0.45, star: 0.0, water: '#2a5a8c' },
+    { h: 19.0, skyTop: '#1a2347', skyBot: '#6f5fa6', fog: '#4e5478', sun: 0.22, moon: 0.20, sunColor: '#d98a5a', hemi: 0.20, amb: 0.20, lamp: 0.8, star: 0.18, water: '#1a3a66' },
+    { h: 20.0, skyTop: '#101a3a', skyBot: '#2c3a63', fog: '#232c4e', sun: 0.04, moon: 0.42, sunColor: '#c98d5f', hemi: 0.20, amb: 0.20, lamp: 1.0, star: 0.6, water: '#0f2447' },
+    { h: 21.0, skyTop: '#030509', skyBot: '#0b1226', fog: '#090e20', sun: 0.00, moon: 0.55, sunColor: '#fff2dd', hemi: 0.14, amb: 0.16, lamp: 1.0, star: 1.0, water: '#081426' },
+    { h: 24.0, skyTop: '#030509', skyBot: '#0b1226', fog: '#090e20', sun: 0.00, moon: 0.50, sunColor: '#fff2dd', hemi: 0.14, amb: 0.16, lamp: 1.0, star: 1.0, water: '#081426' }
   ];
 
   function todSample(h) {
@@ -138,11 +173,14 @@
     var a = TOD_KEYS[i], b = TOD_KEYS[i + 1];
     var t = (h - a.h) / Math.max(1e-5, b.h - a.h);
     t = clamp(t, 0, 1);
+    t = t * t * (3 - 2 * t); // smoothstep: ease the handoff
     return {
       skyTop: hexLerp(a.skyTop, b.skyTop, t),
       skyBot: hexLerp(a.skyBot, b.skyBot, t),
       fog: hexLerp(a.fog, b.fog, t),
       sun: lerp(a.sun, b.sun, t),
+      moon: lerp(a.moon, b.moon, t),
+      sunColor: hexLerp(a.sunColor, b.sunColor, t),
       hemi: lerp(a.hemi, b.hemi, t),
       amb: lerp(a.amb, b.amb, t),
       lamp: lerp(a.lamp, b.lamp, t),
@@ -155,33 +193,59 @@
     curTOD = ((h % 24) + 24) % 24;
     var s = todSample(curTOD);
 
+    // weather muting: desaturate + dim the palette, soften shadows
+    var mute = 1, grayMix = 0;
+    if (weatherMode === 'Cloudy') { mute = 0.62; grayMix = 0.45; }
+    else if (weatherMode === 'Rain') { mute = 0.40; grayMix = 0.62; }
+    var gray = new THREE.Color('#8f99a6');
+    if (grayMix > 0) {
+      s.skyTop.lerp(gray, grayMix); s.skyBot.lerp(gray, grayMix); s.fog.lerp(gray, grayMix * 0.8);
+    }
+
     skyMat.uniforms.topColor.value.copy(s.skyTop);
     skyMat.uniforms.bottomColor.value.copy(s.skyBot);
     scene.fog.color.copy(s.fog);
     renderer.setClearColor(s.fog);
 
-    // sun orbit: angle maps 6h -> east horizon, 12h -> zenith, 18h -> west
-    var ang = (curTOD - 6) / 12 * Math.PI; // 0 at 6h, PI at 18h
+    nightF = clamp(1 - s.sun * 2.2, 0, 1); // 0 day -> 1 night
+    sunF = clamp(s.sun * 1.6, 0, 1);
+
+    // sun orbit: 6h -> east horizon, 12h -> zenith, 18h -> west
+    var ang = (curTOD - 6) / 12 * Math.PI;
     var sx = Math.cos(ang) * 160, sy = Math.sin(ang) * 160, sz = 60;
+    var sunI = s.sun * 0.45 * mute;
     sunLight.position.set(sx, sy, sz);
-    sunLight.intensity = s.sun * 1.35;
-    hemiLight.intensity = s.hemi;
+    sunLight.intensity = sunI;
+    sunLight.color.copy(s.sunColor);
+    // soften shadows under cloud cover
+    sunLight.shadow.intensity = 0.55 + 0.45 * mute;
+    hemiLight.intensity = s.hemi * (0.75 + 0.25 * mute);
     ambLight.intensity = s.amb;
 
-    sunSprite.position.set(sx * 3.2, Math.max(sy * 3.2, -80), sz * 3.2);
-    sunSprite.material.opacity = clamp(s.sun * 1.6, 0, 1);
+    // moon: cool fill light, crossfades in as the sun hands off (twilight blend)
     var mang = ((curTOD + 12) % 24 - 6) / 12 * Math.PI;
     var mx = Math.cos(mang) * 160, my = Math.sin(mang) * 160;
-    moonSprite.position.set(mx * 3.2, Math.max(my * 3.2, -80), -60 * 3.2);
-    moonSprite.material.opacity = clamp(1 - s.sun * 2, 0, 1) * 0.95;
+    var moonI = s.moon * 0.55 * (0.6 + 0.4 * mute);
+    moonLight.position.set(mx, Math.max(my, 30), -140);
+    moonLight.intensity = moonI;
 
-    starMat.opacity = s.star;
+    sunSprite.material.color.copy(s.sunColor);
+    // sun/moon billboards are positioned per-frame in onTick (camera-relative),
+    // so they read as "sun in the sky" / "moon in the top-right" like the reference
+    sunSprite.material.opacity = sunF;
+    moonSprite.material.opacity = clamp(nightF * 1.2, 0, 1) * 0.98;
 
-    var li = 0.15 + s.lamp * 2.2;
+    starMat.opacity = s.star * mute;
+    starBase = starMat.opacity;
+
+    // lamps burn brighter in gloom
+    var lampF = clamp(s.lamp + (1 - mute) * 0.5, 0, 1);
+    var li = 0.15 + lampF * 2.4;
     lamps.forEach(function (L) {
-      L.bulbMat.emissiveIntensity = 0.3 + s.lamp * 2.4;
-      L.glowMat.opacity = 0.12 + s.lamp * 0.5;
+      L.bulbMat.emissiveIntensity = 0.3 + lampF * 2.6;
+      L.glowMat.opacity = 0.10 + lampF * 0.55;
     });
+    lampLights.forEach(function (pl) { pl.intensity = lampF * 1.6; });
     windows.forEach(function (m) { m.emissiveIntensity = li; });
 
     waterMesh.material.color.copy(s.water);
@@ -227,11 +291,34 @@
     sunSprite.scale.set(150, 150, 1);
     scene.add(sunSprite);
     moonSprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: makeGlowTexture('rgba(235,242,255,1)', 'rgba(150,170,220,0)'),
+      map: makeMoonTexture(),
       transparent: true, fog: false, depthWrite: false, opacity: 0
     }));
-    moonSprite.scale.set(70, 70, 1);
+    moonSprite.scale.set(90, 90, 1);
     scene.add(moonSprite);
+  }
+
+  function buildFireflies() {
+    var n = 70;
+    var pos = new Float32Array(n * 3);
+    fireflyBase = new Float32Array(n * 3);
+    fireflyPhase = new Float32Array(n);
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2;
+      var r = 6 + Math.random() * (R - 10);
+      var x = Math.cos(a) * r, z = Math.sin(a) * r;
+      var y = 1.0 + groundHeight(x, z) + 1.2 + Math.random() * 2.4;
+      fireflyBase[i * 3] = x; fireflyBase[i * 3 + 1] = y; fireflyBase[i * 3 + 2] = z;
+      fireflyPhase[i] = Math.random() * 6.28;
+      pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    fireflies = new THREE.Points(g, new THREE.PointsMaterial({
+      color: 0xd8ff9e, size: 0.55, transparent: true, opacity: 0,
+      depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    scene.add(fireflies);
   }
 
   function buildWater() {
@@ -369,6 +456,13 @@
     g.position.set(x, gy, z);
     scene.add(g);
     lamps.push({ bulbMat: bulbMat, glowMat: glowMat, glow: glow, phase: Math.random() * 6.28 });
+    // a few real point lights for warm pools of light at night (perf-capped)
+    if (lampLights.length < 3) {
+      var pl = new THREE.PointLight(0xffc37a, 0, 22, 2);
+      pl.position.set(x, gy + 3.6, z);
+      scene.add(pl);
+      lampLights.push(pl);
+    }
   }
 
   function buildPalm(x, z) {
@@ -444,7 +538,7 @@
     }
     var g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    var m = new THREE.PointsMaterial({ color: 0xaaccee, size: 0.35, transparent: true, opacity: 0.7 });
+    var m = new THREE.PointsMaterial({ color: 0xaaccee, size: 0.55, transparent: true, opacity: 0.8 });
     rain = new THREE.Points(g, m);
     rain.visible = false;
     scene.add(rain);
@@ -626,6 +720,8 @@
       c.userData.baseOp = cloudOp;
     });
     if (rain) rain.visible = (mode === 'Rain');
+    // re-apply the palette so weather muting (desaturation/dimming) takes effect
+    if (typeof applyTimeOfDay === 'function' && typeof curTOD === 'number') applyTimeOfDay(curTOD);
   }
 
   // ---------- per-frame ----------
@@ -635,7 +731,16 @@
     updateTween(dt);
     applyCamera();
 
-    // water shimmer: gentle vertex waves
+    // keep the sun/moon billboards in frame (camera-relative sky anchors)
+    var _f = new THREE.Vector3(); camera.getWorldDirection(_f);
+    var _r = new THREE.Vector3().crossVectors(_f, camera.up).normalize();
+    var _u = new THREE.Vector3().crossVectors(_r, _f).normalize();
+    sunSprite.position.copy(camera.position)
+      .addScaledVector(_f, 500).addScaledVector(_u, 150).addScaledVector(_r, -190);
+    moonSprite.position.copy(camera.position)
+      .addScaledVector(_f, 500).addScaledVector(_u, 170).addScaledVector(_r, 210);
+
+    // water shimmer: gentle vertex waves + subtle opacity pulse
     if (waterGeo) {
       var p = waterGeo.attributes.position, base = waterGeo.userData.base;
       for (var i = 0; i < p.count; i += 2) { // stride 2 keeps it cheap
@@ -644,6 +749,21 @@
       }
       p.needsUpdate = true;
       waterGeo.computeVertexNormals();
+      waterMesh.material.opacity = 0.90 + Math.sin(wobT * 0.9) * 0.03;
+    }
+
+    // star twinkle + firefly drift at night
+    if (starMat) starMat.opacity = starBase * (0.9 + 0.1 * Math.sin(wobT * 3.1));
+    if (fireflies) {
+      var fp = fireflies.geometry.attributes.position;
+      for (var fi = 0; fi < fp.count; fi++) {
+        var ph = fireflyPhase[fi];
+        fp.setX(fi, fireflyBase[fi * 3] + Math.sin(wobT * 0.7 + ph) * 1.6);
+        fp.setY(fi, fireflyBase[fi * 3 + 1] + Math.sin(wobT * 1.1 + ph * 2) * 0.7);
+        fp.setZ(fi, fireflyBase[fi * 3 + 2] + Math.cos(wobT * 0.5 + ph) * 1.6);
+      }
+      fp.needsUpdate = true;
+      fireflies.material.opacity = nightF * (0.55 + 0.35 * Math.sin(wobT * 2.3));
     }
 
     // cloud drift
@@ -702,6 +822,10 @@
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputEncoding = THREE.sRGBEncoding;
+    // cinematic tone mapping: warmer highlights, deeper night.
+    // (kept subtle so the stylized palette stays vivid)
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
     container.appendChild(renderer.domElement);
 
     scene = new THREE.Scene();
@@ -709,7 +833,7 @@
 
     camera = new THREE.PerspectiveCamera(50, 1, 0.5, 2000);
 
-    // lights: hemisphere + directional sun + ambient (3 real lights)
+    // lights: hemisphere + directional sun + cool moon fill + ambient
     hemiLight = new THREE.HemisphereLight(0xbfd9ff, 0x6a8f5a, 0.65);
     scene.add(hemiLight);
     sunLight = new THREE.DirectionalLight(0xfff2dd, 1.1);
@@ -721,6 +845,11 @@
     sunLight.shadow.bias = -0.0006;
     scene.add(sunLight);
     scene.add(sunLight.target);
+    // moonlight: dim cool fill that crossfades in as the sun hands off
+    moonLight = new THREE.DirectionalLight(0x8fb4e8, 0.0);
+    moonLight.castShadow = false; // perf: shadows stay on the sun pass
+    scene.add(moonLight);
+    scene.add(moonLight.target);
     ambLight = new THREE.AmbientLight(0xffffff, 0.5);
     scene.add(ambLight);
 
@@ -739,6 +868,7 @@
     scatterPalms();
     buildClouds();
     buildRain();
+    buildFireflies();
 
     applyTimeOfDay(10.5);
     setWeather('Clear');

@@ -29,8 +29,9 @@ Demo deep links: `?tod=22.5` freezes the time of day (0–24h clock),
 ![Day](docs/screenshot-day.png)
 ![Night](docs/screenshot-night.png)
 ![Golden hour](docs/screenshot-golden.png)
+![Blue hour](docs/screenshot-bluehour.png)
 
-Video walkthrough (golden hour, external agent joins, cinematic orbit):
+Video walkthrough (golden → blue hour → night timelapse):
 [docs/demo.webm](docs/demo.webm)
 
 ## What you can do
