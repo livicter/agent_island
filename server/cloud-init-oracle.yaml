@@ -1,0 +1,56 @@
+#cloud-config
+# Agent Island engine — unattended first-boot setup for an Oracle Cloud
+# Always Free Ampere VM (Ubuntu 24.04).
+#
+# How to use:
+#   1. In the OCI console: Compute → Instances → Create instance.
+#   2. Expand "Advanced options" → "Management" → paste this whole file
+#      into the "Initialization script" (cloud-init user-data) box.
+#   3. Create the instance, add TCP 8902 ingress to its security list,
+#      then SSH in and watch:  tail -f /var/log/cloud-init-output.log
+#
+# What it does (idempotent-ish: safe to re-run, won't clobber an existing
+# world or regenerate the secret):
+#   - installs Docker + the Compose v2 plugin + git + openssl
+#   - clones https://github.com/livicter/agent_island to ~/agent_island
+#   - generates server/.env with a random ISLAND_SECRET (first boot only)
+#   - runs `docker compose up -d` in server/ (engine on :8902)
+
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-plugin
+  - git
+  - openssl
+
+# keep the default `ubuntu` user that OCI Ubuntu images ship with
+users:
+  - default
+
+runcmd:
+  - systemctl enable --now docker
+  - usermod -aG docker ubuntu
+  # clone the island repo (public — no credentials needed)
+  - |
+    if [ ! -d /home/ubuntu/agent_island ]; then
+      sudo -u ubuntu git clone https://github.com/livicter/agent_island.git /home/ubuntu/agent_island
+    fi
+  # one-time secret for the engine (never regenerated once written)
+  - |
+    ENV=/home/ubuntu/agent_island/server/.env
+    if [ ! -f "$ENV" ]; then
+      printf 'ISLAND_SECRET=%s\n' "$(openssl rand -hex 32)" | sudo -u ubuntu tee "$ENV" > /dev/null
+      chmod 600 "$ENV"
+      echo "generated ISLAND_SECRET in $ENV"
+    else
+      echo "$ENV already exists — keeping existing secret"
+    fi
+  # bring the engine up (Compose v2 plugin syntax)
+  - |
+    cd /home/ubuntu/agent_island/server
+    sudo -u ubuntu docker compose up -d
+  # sanity check the engine answered
+  - sleep 8
+  - curl -fsS http://localhost:8902/health || echo "engine not up yet — check: docker compose logs engine"
+
+final_message: "Agent Island engine bootstrap finished. Logs: /var/log/cloud-init-output.log — engine: docker compose logs engine"

@@ -49,7 +49,125 @@ Engine facts worth knowing before you pick a target:
 
 ---
 
-## Target A — Local / VPS with Docker Compose
+## Target A — Oracle Cloud Always Free ⭐ recommended ($0)
+
+Good for: a genuinely free, always-on host — the only free tier that fits
+this engine (WS-capable, never sleeps, persistent disk). You manage a real
+Linux VM; the included cloud-init script does the setup for you.
+
+**Verified facts (September 2026):**
+
+- Always Free Ampere A1 = **2 OCPU / 12 GB RAM per tenancy** (halved from
+  4/24 in June 2026 — instances above the new limit get terminated, so
+  provision exactly **2 OCPU / 12 GB**). Up to 2× E2.1.Micro (1 OCPU / 1 GB
+  each) are also free. 200 GB block storage, ~10 TB/month egress.
+- **"Out of host capacity" errors are normal** on the free tier — retry, or
+  try a different availability domain / region.
+- Always Free resources exist **only in your home region** (chosen once at
+  signup, permanent — pick deliberately). For Hong Kong proximity choose
+  **ap-singapore-1** or **ap-mumbai-1**.
+- Instances may be reclaimed after 7 days under 20% CPU + network + memory.
+  The engine's 50 ms tick keeps the CPU warm, so this is unlikely to bite —
+  but log in to the console at least monthly anyway.
+- Signup needs account + phone + **credit card** ($1 authorization hold;
+  never charged while inside Always Free limits).
+
+### 1. Create the instance
+
+1. Sign up at `oracle.com/cloud/free`. **Choose your home region
+   deliberately** — it can never be changed (`ap-singapore-1` recommended
+   for HK).
+2. Console → **Compute → Instances → Create instance**.
+3. **Image:** Ubuntu **24.04** (standard — NOT "Minimal" on ARM).
+4. **Shape:** Ampere → **VM.Standard.A1.Flex** → set **2 OCPU / 12 GB**
+   (the maximum allowed — do not exceed it).
+5. **Networking:** keep the default VCN, public subnet, and **assign a
+   public IPv4 address**.
+6. **Add SSH keys:** paste your public key (`ssh-keygen -t ed25519` if you
+   don't have one).
+7. **Advanced options → Management:** paste the entire contents of
+   `server/cloud-init-oracle.yaml` into the **Initialization script** box.
+   It installs Docker + Compose, clones the repo, generates a random
+   `ISLAND_SECRET`, and starts the engine — no SSH needed for setup.
+8. **Create.** Note the instance's **public IP**.
+
+> "Out of host capacity"? Wait and retry, switch availability domain
+> (AD-1 → AD-2 → AD-3), or try another region. This is the normal free-tier
+> experience, not a misconfiguration.
+
+### 2. Open the firewall
+
+The engine listens on **TCP 8902** (WS + HTTP).
+
+1. Instance details → **Virtual cloud network** → **Security lists** →
+   open the subnet's security list → **Add ingress rule**:
+   - Source CIDR: `0.0.0.0/0`, IP protocol: TCP, destination port: `8902`.
+2. Port 22 is already open for SSH.
+
+### 3. Verify
+
+```bash
+ssh ubuntu@<public-ip>
+tail -f /var/log/cloud-init-output.log   # watch the first-boot setup
+docker compose -f ~/agent_island/server/docker-compose.yml logs -f engine
+curl http://localhost:8902/health        # expect { ok: true, agents: 14, … }
+```
+
+From your own browser, open `http://<public-ip>:8902/health`, then point
+the island frontend at the engine:
+
+```
+https://<your-pages-site>/?server=ws://<public-ip>:8902
+```
+
+The first boot restores nothing (fresh island, "fresh boot — spawned
+roster"); every boot after that restores your world from the snapshot.
+
+### Secrets, backups, updates, logs
+
+```bash
+cd ~/agent_island/server
+cat .env                        # ISLAND_SECRET=… (generated on first boot — keep private)
+docker compose logs -f engine   # live logs
+
+# manual world snapshot (the engine also saves every 30 s on its own)
+curl "http://localhost:8902/admin/snapshot?secret=$(grep ISLAND_SECRET .env | cut -d= -f2)"
+
+# backup the world
+docker cp island-engine:/app/server/data/world-8902.json ./world-backup.json
+# restore: docker compose stop engine
+#          docker cp ./world-backup.json island-engine:/app/server/data/world-8902.json
+#          docker compose start engine
+
+# update to the latest island code
+git -C ~/agent_island pull
+docker compose up -d --build
+
+# start over with a fresh world
+docker compose stop engine
+docker run --rm -v island-data:/data alpine rm /data/world-8902.json
+docker compose start engine
+```
+
+### `ws://` vs `wss://` on Oracle
+
+The engine speaks plain HTTP/WS on :8902. Browsers allow `ws://` only from
+pages served over **plain HTTP** (or `file://`). If your frontend is on
+**HTTPS** (e.g. GitHub Pages), the browser blocks `ws://` as mixed content
+and you need `wss://` behind TLS. Options, easiest first:
+
+1. Serve the frontend over plain HTTP too, and use `ws://<ip>:8902`.
+2. **Cloudflare Tunnel** (free): `cloudflared` on the VM exposes
+   `https://island.example.com` → `localhost:8902` — `wss://` with no open
+   ports and no certificate management.
+3. **Caddy** on the VM with a domain pointed at the IP — automatic
+   Let's Encrypt certs, reverse-proxying 8902.
+
+v1 can ship on plain `ws://`; add TLS when the island goes public.
+
+---
+
+## Target B — Local / VPS with Docker Compose
 
 Good for: full control, cheapest long-term, colocating page + engine.
 
@@ -95,7 +213,7 @@ docker compose start engine
 
 ---
 
-## Target B — Fly.io
+## Target C — Fly.io
 
 Good for: global edge, HTTPS/WS out of the box, close to Hong Kong.
 
@@ -156,7 +274,7 @@ same Dockerfile with `command = ["node","slack.js"]` in `fly.toml`.
 
 ---
 
-## Target C — Railway
+## Target D — Railway
 
 Good for: fastest setup, automatic HTTPS domain.
 
@@ -207,6 +325,7 @@ https://<pages-site>/?server=wss://<engine-host>/?tod=12
 
 | Target | Approx. cost |
 |---|---|
+| **Oracle Cloud Always Free** | **$0** while inside Always Free limits (2 OCPU/12 GB ARM VM, 200 GB disk) — credit card required at signup for identity |
 | Fly.io | ~$5/mo for a 512 MB always-on machine + a few $/mo for the volume. Free allowances change often — check `fly.io/docs/about/pricing` before counting on them. |
 | Railway | ~$5/mo Hobby plan covers a small always-on engine; usage-based beyond that. |
 | VPS (Hetzner etc.) | ~€4/mo for a small VM, Docker Compose, Caddy for TLS. Cheapest steady-state. |
@@ -238,4 +357,5 @@ https://<pages-site>/?server=wss://<engine-host>/?tod=12
 | `.env.example` | Template for local Compose / reference for hosted secrets |
 | `.dockerignore` | Keeps node_modules, data, .git, tests, .env out of the image |
 | `fly.toml` | Fly.io app config (always-on machine, health check, data volume) |
+| `cloud-init-oracle.yaml` | Unattended first-boot setup for Oracle Always Free: Docker, repo clone, secret, engine start |
 | `DEPLOY.md` | This guide |
