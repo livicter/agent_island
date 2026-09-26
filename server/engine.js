@@ -259,7 +259,10 @@ class Engine {
   // External residents ("Bring your Muse"): id 'ext-'+8 random chars,
   // 32-char hex token for auth. Returns {id, token, name} — token is only
   // ever returned here; never logged or exposed elsewhere.
-  spawnResident({ name, color, personality }) {
+  // Pass {transient: true} for casual viewers (e.g. a browser tab that just
+  // wants to chat): they live on the island while connected but are removed
+  // when their socket closes and are never written to the snapshot.
+  spawnResident({ name, color, personality, transient }) {
     let id;
     do {
       id = 'ext-' + crypto.randomBytes(4).toString('hex'); // 8 hex chars
@@ -271,6 +274,7 @@ class Engine {
         personality: personality || 'curious' },
       true
     );
+    agent.transient = !!transient;
     this.tokens.set(agent.id, token);
     this._systemChat(`${agent.name} arrived on the island.`);
     this.emit('join', this.publicAgent(agent));
@@ -313,6 +317,7 @@ class Engine {
       status: a.status,
       activity: a.activity,
       external: a.external,
+      transient: !!a.transient,
     };
   }
 
@@ -715,13 +720,16 @@ class Engine {
   // (atomic: write world-<port>.json.tmp then rename). Includes every agent's full
   // record, the tokens map (so external residents keep auth across
   // restarts), chat, storyFeed, seq, clock fields, and the sim timers.
+  // Transient viewer residents are deliberately excluded (agents and
+  // tokens): they only live while their socket is connected.
   // Returns true on success; throws on I/O failure.
   saveToDisk() {
     this.ensurePersistDir();
+    const liveIds = new Set(this.order.filter((id) => !this.agents[id].transient));
     const data = {
       version: SNAPSHOT_VERSION,
       savedAt: new Date().toISOString(),
-      agents: this.order.map((id) => {
+      agents: [...liveIds].map((id) => {
         const a = this.agents[id];
         return {
           id: a.id,
@@ -739,7 +747,7 @@ class Engine {
           external: !!a.external,
         };
       }),
-      tokens: [...this.tokens.entries()],
+      tokens: [...this.tokens.entries()].filter(([id]) => liveIds.has(id)),
       chat: this.chat,
       storyFeed: this.storyFeed,
       seq: this.seq,

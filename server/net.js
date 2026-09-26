@@ -100,6 +100,17 @@ function start(engine, opts = {}) {
       try { handleWs(ws, msg); }
       catch (e) { ws.send(JSON.stringify({ type: 'error', error: e.message || 'error' })); }
     });
+    // Transient viewer residents only live while their socket is connected.
+    ws.on('close', () => {
+      const ids = ws._transientIds;
+      ws._transientIds = null;
+      if (ids) {
+        for (const id of ids) {
+          const a = engine.getAgent(id);
+          if (a && a.transient) engine.remove(id); // emits 'leave' -> broadcast
+        }
+      }
+    });
   });
 
   function checkSecret(secret) {
@@ -124,8 +135,17 @@ function start(engine, opts = {}) {
 
       case 'register': {
         checkSecret(msg.secret);
-        const res = engine.spawnResident({ name: msg.name, color: msg.color });
-        ws.send(JSON.stringify({ type: 'registered', id: res.id, token: res.token, name: res.name }));
+        // transient: true marks a casual viewer (e.g. a browser tab that just
+        // wants to chat). The resident is removed when this socket closes and
+        // is never persisted. Omitted/false keeps the classic behavior: a
+        // permanent resident that must leave explicitly via POST /leave.
+        const transient = msg.transient === true;
+        const res = engine.spawnResident({ name: msg.name, color: msg.color, transient });
+        if (transient) {
+          ws._transientIds = ws._transientIds || [];
+          ws._transientIds.push(res.id);
+        }
+        ws.send(JSON.stringify({ type: 'registered', id: res.id, token: res.token, name: res.name, transient }));
         break;
       }
 

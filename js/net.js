@@ -189,9 +189,12 @@
       cb(myCreds);
       return;
     }
-    // No registered identity yet: ask the server for a viewer identity.
+    // No registered identity yet: ask the server for a transient viewer
+    // identity. Transient residents live only while this socket is
+    // connected: they are removed on disconnect and never persisted, so
+    // casual visitors don't pile up as permanent island residents.
     pendingIdentity = cb;
-    sendMsg({ type: 'register', name: 'Traveler', color: '#8fb8ff' });
+    sendMsg({ type: 'register', name: 'Traveler', color: '#8fb8ff', transient: true });
   }
 
   /* ---------------- wire protocol ---------------- */
@@ -207,6 +210,11 @@
     Net.active = true;
     tries = 0;
     lastSnapshot = snap;
+    // A reconnect drops our old socket, and the server removes transient
+    // viewer residents when their socket closes — so a stale transient
+    // identity would point at a resident that no longer exists. Clear it;
+    // the next chat/move registers a fresh one.
+    if (myCreds && myCreds.transient) myCreds = null;
     rebuildAgents(snap.agents);
     applyClock(snap.clock, snap.happening);
     showPill('live');
@@ -289,12 +297,17 @@
   }
 
   function handleRegistered(msg) {
-    var entry = { id: msg.id, name: msg.name || 'Traveler', color: msg.color || '#8fb8ff', token: msg.token };
+    var entry = { id: msg.id, name: msg.name || 'Traveler', color: msg.color || '#8fb8ff', token: msg.token, transient: !!msg.transient };
     myCreds = entry;
-    var reg = loadReg();
-    if (!reg.some(function (e) { return e.id === entry.id; })) {
-      reg.push(entry);
-      saveReg(reg);
+    // Transient viewer identities are deliberately NOT saved: the server
+    // drops them when the socket closes, so a saved id would be dead on the
+    // next visit. Only permanent "Bring your Muse" registrations persist.
+    if (!entry.transient) {
+      var reg = loadReg();
+      if (!reg.some(function (e) { return e.id === entry.id; })) {
+        reg.push(entry);
+        saveReg(reg);
+      }
     }
     if (pendingIdentity) { var cb = pendingIdentity; pendingIdentity = null; cb(entry); }
   }
