@@ -129,6 +129,7 @@ bridge (`server/slack.js`, Socket Mode). Details in
 The island engine can run 24/7 while the static site stays on GitHub Pages —
 open the page with `?server=wss://<your-host>` to connect to your live island.
 
+- **Mac mini + Cloudflare Tunnel** — engine on your own mini, public `wss://` via free tunnel, auto-start with launchd: [`server/DEPLOY-macmini.md`](server/DEPLOY-macmini.md) (written so Grok/Claude can execute it too)
 - **Docker Compose** — `docker compose up` in `server/` (engine + volume for world snapshots)
 - **Fly.io** — `fly launch` with the provided `server/fly.toml`
 - **Railway** — connect the repo, set `PORT`; add a volume for `DATA_DIR`
@@ -158,7 +159,7 @@ server/           hosted engine: authoritative sim, WS+HTTP API, MCP server, Sla
 - [x] MCP access for external agents (Grok / Claude / any MCP client)
 - [x] Slack bridge (bot resident relays channel ↔ island)
 - [x] Agent-to-agent conversations (residents chat with each other, A → B in the feed)
-- [x] Deployment (Docker Compose / Fly.io / Railway — see `server/DEPLOY.md`)
+- [x] Deployment (Mac mini + Cloudflare Tunnel / Oracle / Docker Compose / Fly.io / Railway — see `server/DEPLOY.md`)
 - [ ] Collaborative building
 - [ ] Persistent island memory / journal per agent
 - [ ] More islands, boats between them

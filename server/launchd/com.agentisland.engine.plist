@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Agent Island engine: starts the authoritative sim at login/boot. -->
+    <key>Label</key>
+    <string>com.agentisland.engine</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>node</string>
+        <string>/opt/agent-island/server/index.js</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/opt/agent-island/server</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Covers Apple Silicon (/opt/homebrew) and Intel (/usr/local) brews. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PORT</key>
+        <string>8902</string>
+        <key>DATA_DIR</key>
+        <string>/opt/agent-island/server/data</string>
+        <!-- REQUIRED: replace with a real secret, then chmod 600 this file. -->
+        <key>ISLAND_SECRET</key>
+        <string>REPLACE_WITH_openssl_rand_-hex_32</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/REPLACE_WITH_USERNAME/Library/Logs/agent-island/engine.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/REPLACE_WITH_USERNAME/Library/Logs/agent-island/engine.err.log</string>
+</dict>
+</plist>

@@ -167,7 +167,38 @@ v1 can ship on plain `ws://`; add TLS when the island goes public.
 
 ---
 
-## Target B — Local / VPS with Docker Compose
+## Target B — Mac mini + Cloudflare Tunnel ⭐ recommended ($0)
+
+Good for: **this island's keeper** — you already own an always-on Mac mini,
+so the engine lives on your hardware for $0 forever, exposed publicly via a
+free Cloudflare Tunnel (automatic TLS, so the frontend uses `wss://` — no
+mixed-content issues, no port forwarding, works behind CGNAT).
+
+The full walkthrough — written for both humans and AI agent executors
+(Grok/Claude can follow it step by step) — is
+**[`DEPLOY-macmini.md`](DEPLOY-macmini.md)**. The 10-line version:
+
+1. **Prereqs:** mini stays awake (Energy settings), Homebrew, a Cloudflare
+   account + domain.
+2. **Engine:** `brew install node@20`, clone the repo to `/opt/agent-island`,
+   `npm ci --omit=dev` in `server/`, set `ISLAND_SECRET` in `.env`.
+3. **Tunnel:** `brew install cloudflared` → `cloudflared tunnel login` →
+   `tunnel create island-engine` → `tunnel route dns island-engine
+   island.<your-domain>` → `~/.cloudflared/config.yml` ingress to
+   `http://localhost:8902`.
+4. **Auto-start:** copy `server/launchd/*.plist` to
+   `~/Library/LaunchAgents/`, fill in placeholders, `launchctl bootstrap`
+   both — engine + tunnel survive reboots.
+5. **Connect:** `https://<your-pages-site>/?server=wss://island.<your-domain>`
+   → ● LIVE pill.
+
+Pick **Target A (Oracle)** if you'd rather not depend on a local machine;
+pick **Target B (Mac mini)** if the mini is already on 24/7 — it's the
+simplest $0 path with the hardware in front of you.
+
+---
+
+## Target C — Local / VPS with Docker Compose
 
 Good for: full control, cheapest long-term, colocating page + engine.
 
@@ -213,7 +244,7 @@ docker compose start engine
 
 ---
 
-## Target C — Fly.io
+## Target D — Fly.io
 
 Good for: global edge, HTTPS/WS out of the box, close to Hong Kong.
 
@@ -274,7 +305,7 @@ same Dockerfile with `command = ["node","slack.js"]` in `fly.toml`.
 
 ---
 
-## Target D — Railway
+## Target E — Railway
 
 Good for: fastest setup, automatic HTTPS domain.
 
@@ -326,6 +357,7 @@ https://<pages-site>/?server=wss://<engine-host>/?tod=12
 | Target | Approx. cost |
 |---|---|
 | **Oracle Cloud Always Free** | **$0** while inside Always Free limits (2 OCPU/12 GB ARM VM, 200 GB disk) — credit card required at signup for identity |
+| **Mac mini + Cloudflare Tunnel** | **$0** — your hardware, free tunnel + TLS; needs the mini on 24/7 |
 | Fly.io | ~$5/mo for a 512 MB always-on machine + a few $/mo for the volume. Free allowances change often — check `fly.io/docs/about/pricing` before counting on them. |
 | Railway | ~$5/mo Hobby plan covers a small always-on engine; usage-based beyond that. |
 | VPS (Hetzner etc.) | ~€4/mo for a small VM, Docker Compose, Caddy for TLS. Cheapest steady-state. |
@@ -358,4 +390,6 @@ https://<pages-site>/?server=wss://<engine-host>/?tod=12
 | `.dockerignore` | Keeps node_modules, data, .git, tests, .env out of the image |
 | `fly.toml` | Fly.io app config (always-on machine, health check, data volume) |
 | `cloud-init-oracle.yaml` | Unattended first-boot setup for Oracle Always Free: Docker, repo clone, secret, engine start |
+| `DEPLOY-macmini.md` | Mac mini + Cloudflare Tunnel walkthrough (human + AI-agent executor) |
+| `launchd/` | `com.agentisland.engine.plist` + `com.agentisland.tunnel.plist` — macOS auto-start services |
 | `DEPLOY.md` | This guide |
