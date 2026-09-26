@@ -108,6 +108,17 @@
     if (typeof window.UI !== 'undefined' && window.UI.feedEvent) {
       try { window.UI.feedEvent(text, 'ISLAND MOMENT'); } catch (e) {}
     }
+    // visual only: participants turn toward the event location
+    try {
+      if (place && window.Island && window.Island.faceToward) {
+        [a, b].forEach(function (nm) {
+          for (var i = 0; i < order.length; i++) {
+            var ag = agents[order[i]];
+            if (!ag.external && ag.name === nm) { window.Island.faceToward(order[i], place.x, place.z); break; }
+          }
+        });
+      }
+    } catch (e) {}
   }
 
   function placeByName(text) {

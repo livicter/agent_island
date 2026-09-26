@@ -42,9 +42,11 @@
   var sunF = 1;               // 0 = sun down, 1 = full day sun (set by applyTimeOfDay)
   var starBase = 0;           // base star opacity from palette (twinkle modulates it)
   var overview = false;
+  var followId = null;        // agent id the camera is following, or null
+  var speechLayer = null;     // DOM layer for floating speech bubbles
 
-  var cam = { yaw: 0.85, pitch: 0.55, dist: 72, tx: 0, ty: 2, tz: 0 };
-  var DEFAULT_VIEW = { yaw: 0.85, pitch: 0.55, dist: 72, tx: 0, ty: 2, tz: 0 };
+  var cam = { yaw: 0.85, pitch: 0.52, dist: 46, tx: 0, ty: 2, tz: 0 };
+  var DEFAULT_VIEW = { yaw: 0.85, pitch: 0.52, dist: 46, tx: 0, ty: 2, tz: 0 };
   var OVERVIEW_VIEW = { yaw: 0.85, pitch: 0.95, dist: 155, tx: 0, ty: 0, tz: 0 };
   var tween = null;           // { t, dur, from, to }
   var curTOD = 12;            // hour 0..24
@@ -52,6 +54,12 @@
   function lerp(a, b, t) { return a + (b - a) * t; }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function easeInOut(t) { return t * t * (3 - 2 * t); }
+  // shortest signed angular difference, in (-PI, PI]
+  function shortAngle(a) {
+    while (a > Math.PI) a -= 2 * Math.PI;
+    while (a < -Math.PI) a += 2 * Math.PI;
+    return a;
+  }
 
   function hexLerp(c1, c2, t) {
     var a = new THREE.Color(c1), b = new THREE.Color(c2);
@@ -870,7 +878,7 @@
     el.addEventListener('wheel', function (e) {
       e.preventDefault();
       tween = null;
-      cam.dist = clamp(cam.dist * (1 + e.deltaY * 0.0011), 30, 170);
+      cam.dist = clamp(cam.dist * (1 + e.deltaY * 0.0011), 10, 170);
     }, { passive: false });
   }
 
@@ -891,6 +899,10 @@
       if (o && window.UI && typeof window.UI.openChat === 'function') {
         window.UI.openChat(o.userData.agentId);
       }
+    } else {
+      // empty ground click: drop any follow and close an open chat
+      if (window.Island && typeof window.Island.unfollow === 'function') window.Island.unfollow();
+      if (window.UI && typeof window.UI.closeChat === 'function') window.UI.closeChat();
     }
   }
 
@@ -942,9 +954,8 @@
 
     // Moonwake-style white name pill floating above the head
     var label = makeLabelSprite(name || id, 0.72, true);
-    label.position.y = 3.1;
+    label.position.y = 2.9;
     g.add(label);
-
     g.userData.agentId = id;
     // record rest heights so the per-frame bobbing matches this figure type
     if (g.userData.body) g.userData.baseBodyY = g.userData.body.position.y;
@@ -952,19 +963,45 @@
     var sx = 0, sz = 0;
     g.position.set(sx, 1.0 + groundHeight(sx, sz), sz);
     scene.add(g);
-    agents[id] = { group: g, ringMat: g.userData.ringMat || null, phase: Math.random() * 6.28, status: 'idle', heading: 0 };
+    agents[id] = {
+      group: g,
+      ringMat: g.userData.ringMat || null,
+      phase: Math.random() * 6.28,
+      status: 'idle',
+      heading: 0,
+      targetHeading: 0,
+      lastX: sx,
+      lastZ: sz,
+      walkPhase: Math.random() * 6.28,
+      speedSm: 0,
+      blinkT: 1 + Math.random() * 3,
+      blinkOn: 0,
+      lookT: 4 + Math.random() * 6,
+      lookYaw: 0,
+      lookHold: 0,
+      talkT: 0,
+      waveT: 0,
+      waveCd: 6 + Math.random() * 8,
+      lean: 0,
+      label: label,
+      labelBaseX: label.scale.x,
+      labelBaseY: label.scale.y
+    };
     return g;
   }
 
   function moveAgentMesh(id, x, z, heading) {
     var a = agents[id];
     if (!a) return;
+    // Only steer the facing when the agent actually moved: agents.js calls this
+    // every tick even while idle, and it must not stomp face-camera / face-event
+    // headings set by agentSpeak() / faceToward().
+    var moved = Math.abs(x - a.group.position.x) + Math.abs(z - a.group.position.z) > 1e-4;
     a.group.position.x = x;
     a.group.position.z = z;
     a.group.position.y = 1.0 + groundHeight(x, z);
-    if (typeof heading === 'number') {
-      a.heading = heading;
-      a.group.rotation.y = heading;
+    if (moved && typeof heading === 'number') {
+      a.targetHeading = heading; // heading eases toward this in the animation pass
     }
   }
 
@@ -980,6 +1017,84 @@
     if (!a) return;
     scene.remove(a.group);
     delete agents[id];
+  }
+
+  // point an agent's heading target toward a world position
+  function faceToward(id, x, z) {
+    var a = agents[id];
+    if (!a) return;
+    var p = a.group.position;
+    a.targetHeading = Math.atan2(x - p.x, z - p.z);
+  }
+
+  // ---------- speech bubbles ----------
+  function getBubbleDiv(id) {
+    if (!speechLayer) return null;
+    for (var i = 0; i < speechLayer.children.length; i++) {
+      var d = speechLayer.children[i];
+      if (d.getAttribute('data-agent') === id) return d;
+    }
+    var div = document.createElement('div');
+    div.className = 'speech-bubble';
+    div.setAttribute('data-agent', id);
+    speechLayer.appendChild(div);
+    return div;
+  }
+
+  // floating speech bubble over an agent's head; also makes the agent talk + face the camera
+  function agentSpeak(id, text, durMs) {
+    var a = agents[id];
+    if (!a) return;
+    var d = durMs || 3500;
+    a.talkT = d / 1000;
+    // face the camera while speaking
+    if (camera) {
+      var p = a.group.position;
+      a.targetHeading = Math.atan2(camera.position.x - p.x, camera.position.z - p.z);
+    }
+    var div = getBubbleDiv(id);
+    if (!div) return;
+    div.textContent = String(text).slice(0, 140);
+    div.style.display = '';
+    div.style.visibility = '';
+    div.style.opacity = '1';
+    if (div._t) { clearTimeout(div._t); div._t = null; }
+    div._t = setTimeout(function () {
+      div.style.opacity = '0';
+      div._t = setTimeout(function () {
+        div.style.display = 'none';
+        div.style.opacity = '';
+        div._t = null;
+      }, 400);
+    }, d);
+  }
+
+  var _bubbleV = null;
+  // per-frame: pin each visible bubble above its agent's head
+  function updateSpeechBubbles() {
+    if (!speechLayer || !camera || !container) return;
+    if (!_bubbleV) _bubbleV = new THREE.Vector3();
+    var rect = container.getBoundingClientRect();
+    var w = rect.width, h = rect.height;
+    if (w <= 0 || h <= 0) return;
+    for (var i = speechLayer.children.length - 1; i >= 0; i--) {
+      var div = speechLayer.children[i];
+      var id = div.getAttribute('data-agent');
+      var a = agents[id];
+      if (!a) { div.style.display = 'none'; continue; }
+      if (div.style.display === 'none') continue;
+      var ud = a.group.userData;
+      _bubbleV.set(0, 0, 0);
+      if (ud.headGroup) ud.headGroup.getWorldPosition(_bubbleV);
+      else _bubbleV.copy(a.group.position);
+      _bubbleV.y += 1.2;
+      _bubbleV.project(camera);
+      if (_bubbleV.z > 1) { div.style.visibility = 'hidden'; continue; } // behind camera
+      div.style.visibility = '';
+      var sx = (_bubbleV.x * 0.5 + 0.5) * w;
+      var sy = (-_bubbleV.y * 0.5 + 0.5) * h;
+      div.style.transform = 'translate(-50%, -100%) translate(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px)';
+    }
   }
 
   // ---------- weather ----------
@@ -1004,6 +1119,15 @@
   function onTick(dt, t) {
     wobT += dt;
     updateTween(dt);
+    // follow-cam: ease the camera target onto the followed agent
+    // (user drag still adjusts yaw/pitch; wheel zoom still works)
+    if (followId && agents[followId]) {
+      var fp = agents[followId].group.position;
+      var fk = 1 - Math.exp(-4 * dt);
+      cam.tx += (fp.x - cam.tx) * fk;
+      cam.tz += (fp.z - cam.tz) * fk;
+      cam.ty += ((fp.y + 2) - cam.ty) * fk;
+    }
     applyCamera();
 
     // keep the sun/moon billboards in frame (camera-relative sky anchors)
@@ -1064,18 +1188,158 @@
       L.glow.scale.set(3.2 * f, 3.2 * f, 1);
     });
 
-    // agent bobbing (base heights vary per figure type: chibi vs legacy)
-    Object.keys(agents).forEach(function (id) {
-      var a = agents[id];
-      var speed = a.status === 'working' ? 9 : 3.2;
-      var amp = a.status === 'working' ? 0.13 : 0.05;
-      var b = Math.sin(t * speed + a.phase) * amp;
-      var ub = a.group.userData;
-      var baseBodyY = (ub.baseBodyY !== undefined) ? ub.baseBodyY : 1.15;
-      var baseHeadY = (ub.baseHeadY !== undefined) ? ub.baseHeadY : 1.55;
-      ub.body.position.y = baseBodyY + b;
-      ub.head.position.y = baseHeadY + b * 1.15;
-    });
+    // agent animation: walk cycle, idle life (breath/blink/look/wave), talk
+    // new-rig pivots come from group.userData (guarded: legacy fallback lacks them)
+    var aidList = Object.keys(agents);
+    for (var ai = 0; ai < aidList.length; ai++) {
+      (function (id) {
+        var a = agents[id];
+        var g = a.group;
+        var ud = g.userData;
+        var px = g.position.x, pz = g.position.z;
+
+        // speed from position delta / dt, smoothed
+        var rawSpeed = 0;
+        if (dt > 0) {
+          var ddx = px - a.lastX, ddz = pz - a.lastZ;
+          rawSpeed = Math.sqrt(ddx * ddx + ddz * ddz) / dt;
+        }
+        a.lastX = px; a.lastZ = pz;
+        a.speedSm += (rawSpeed - a.speedSm) * Math.min(1, dt * 6);
+        var moving = a.speedSm > 0.25;
+        var wamp = Math.min(1, a.speedSm / 2);
+
+        // heading: ease toward target heading via shortest arc
+        var dh = shortAngle(a.targetHeading - a.heading);
+        a.heading += dh * Math.min(1, dt * 10);
+        g.rotation.y = a.heading;
+
+        var baseBodyY = (ud.baseBodyY !== undefined) ? ud.baseBodyY : 0.78;
+
+        if (moving) {
+          a.walkPhase += dt * (5 + a.speedSm * 2.2);
+          var s = Math.sin(a.walkPhase);
+          if (ud.legL) ud.legL.rotation.x = s * 0.6 * wamp;
+          if (ud.legR) ud.legR.rotation.x = -s * 0.6 * wamp;
+          if (ud.armL) ud.armL.rotation.x = -s * 0.5 * wamp;
+          if (ud.armR) ud.armR.rotation.x = s * 0.5 * wamp;
+          var bob = Math.abs(Math.cos(a.walkPhase)) * 0.09 * wamp;
+          if (ud.body) ud.body.position.y = baseBodyY + bob;
+          if (ud.headGroup) ud.headGroup.position.y = 1.32 + bob * 1.2;
+          g.rotation.z = s * 0.03 * wamp;
+          // lean into turns + slight forward lean with speed
+          a.lean += (clamp(-dh * 2, -0.08, 0.08) - a.lean) * Math.min(1, dt * 8);
+          g.rotation.x = a.lean + a.speedSm * 0.008;
+          // don't freeze mid-blink when a walk starts
+          if (a.blinkOn > 0) {
+            a.blinkOn = 0;
+            if (ud.eyeL) ud.eyeL.scale.y = 1;
+            if (ud.eyeR) ud.eyeR.scale.y = 1;
+          }
+        } else {
+          // ease limbs and body tilt back to rest
+          var restK = Math.min(1, dt * 6);
+          if (ud.legL) ud.legL.rotation.x += (0 - ud.legL.rotation.x) * restK;
+          if (ud.legR) ud.legR.rotation.x += (0 - ud.legR.rotation.x) * restK;
+          if (ud.armL) { ud.armL.rotation.x += (0 - ud.armL.rotation.x) * restK; ud.armL.rotation.z += (0 - ud.armL.rotation.z) * restK; }
+          if (ud.armR && a.waveT <= 0) { ud.armR.rotation.x += (0 - ud.armR.rotation.x) * restK; ud.armR.rotation.z += (0 - ud.armR.rotation.z) * restK; }
+          g.rotation.x += (0 - g.rotation.x) * restK;
+          g.rotation.z += (0 - g.rotation.z) * restK;
+          a.lean += (0 - a.lean) * restK;
+
+          // breathing
+          var br = Math.sin(t * 2.2 + a.phase) * 0.02;
+          if (ud.body) ud.body.position.y = baseBodyY + br;
+          if (ud.headGroup) ud.headGroup.position.y = 1.32 + br * 1.3;
+
+          // blink
+          if (ud.eyeL || ud.eyeR) {
+            a.blinkT -= dt;
+            if (a.blinkT <= 0) { a.blinkOn = 0.12; a.blinkT = 1 + Math.random() * 3; }
+            if (a.blinkOn > 0) a.blinkOn -= dt;
+            var eyeSY = a.blinkOn > 0 ? 0.12 : 1;
+            if (ud.eyeL) ud.eyeL.scale.y = eyeSY;
+            if (ud.eyeR) ud.eyeR.scale.y = eyeSY;
+          }
+
+          // look around (headGroup.rotation.y; rotation.x belongs to the talk nod)
+          if (ud.headGroup) {
+            a.lookT -= dt;
+            if (a.lookHold > 0) a.lookHold -= dt;
+            if (a.lookT <= 0) {
+              a.lookYaw = (Math.random() - 0.5) * 1.0;
+              a.lookHold = 1.2 + Math.random();
+              a.lookT = 4 + Math.random() * 6;
+            }
+            var wantYaw = a.lookHold > 0 ? a.lookYaw : 0;
+            var hg = ud.headGroup;
+            hg.rotation.y += (wantYaw - hg.rotation.y) * Math.min(1, dt * 5);
+            if (a.talkT <= 0) hg.rotation.x += (0 - hg.rotation.x) * Math.min(1, dt * 5);
+          }
+
+          // wave at a nearby agent now and then
+          a.waveCd -= dt;
+          if (a.waveCd <= 0) {
+            var near = false;
+            for (var m = 0; m < aidList.length; m++) {
+              if (aidList[m] === id) continue;
+              var op = agents[aidList[m]].group.position;
+              var ox = op.x - px, oz = op.z - pz;
+              if (ox * ox + oz * oz < 9) { near = true; break; }
+            }
+            if (near) a.waveT = 1.1;
+            a.waveCd = 8 + Math.random() * 10;
+          }
+        }
+
+        // wave pose (takes priority over walk/idle armR pose while active)
+        if (a.waveT > 0 && ud.armR) {
+          a.waveT -= dt;
+          ud.armR.rotation.z = -2.4 + Math.sin(t * 14) * 0.25;
+          ud.armR.rotation.x = 0;
+          if (a.waveT <= 0) ud.armR.rotation.z = 0;
+        }
+
+        // talk: flapping mouth + head nod + slight lean toward the listener
+        if (a.talkT > 0) {
+          a.talkT -= dt;
+          if (ud.mouth) {
+            if (ud.mouthBaseY === undefined) ud.mouthBaseY = ud.mouth.scale.y || 0.5;
+            ud.mouth.scale.y = ud.mouthBaseY * 0.5 * (0.4 + Math.abs(Math.sin(t * 16)) * 0.9);
+          }
+          if (ud.headGroup) ud.headGroup.rotation.x = Math.sin(t * 8) * 0.06;
+          g.rotation.x += 0.05; // lean in while speaking
+          if (a.talkT <= 0) {
+            if (ud.mouth && ud.mouthBaseY !== undefined) ud.mouth.scale.y = ud.mouthBaseY;
+            // headGroup.rotation.x eases back to 0 in the idle branch above
+          }
+        }
+      })(aidList[ai]);
+
+      // Moonwake-style: name pills keep a constant screen size at any zoom
+      var _a2 = agents[aidList[ai]];
+      if (_a2 && _a2.label) {
+        var _ldx = camera.position.x - _a2.group.position.x,
+            _ldy = camera.position.y - (_a2.group.position.y + 2.5),
+            _ldz = camera.position.z - _a2.group.position.z;
+        var _ld = Math.sqrt(_ldx * _ldx + _ldy * _ldy + _ldz * _ldz);
+        var _lf = clamp(_ld / 46, 0.22, 3);
+        _a2.label.scale.set(_a2.labelBaseX * _lf, _a2.labelBaseY * _lf, 1);
+      }
+    }
+    updateSpeechBubbles();
+
+    // place pills: same constant-screen-size treatment
+    for (var _pli = 0; _pli < labelSprites.length; _pli++) {
+      var _pls = labelSprites[_pli];
+      if (!_pls.userData.baseSX) {
+        _pls.userData.baseSX = _pls.scale.x;
+        _pls.userData.baseSY = _pls.scale.y;
+      }
+      var _pld = camera.position.distanceTo(_pls.position);
+      var _plf = clamp(_pld / 46, 0.22, 3);
+      _pls.scale.set(_pls.userData.baseSX * _plf, _pls.userData.baseSY * _plf, 1);
+    }
 
     // labels face camera automatically (sprites); scale labels by distance is handled by sprite sizeAttenuation
     renderer.render(scene, camera);
@@ -1105,6 +1369,11 @@
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     container.appendChild(renderer.domElement);
+
+    // floating speech bubbles live in an overlay above the canvas (below the HUD)
+    speechLayer = document.createElement('div');
+    speechLayer.id = 'speech-layer';
+    container.appendChild(speechLayer);
 
     scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2('#ccd8e2', 0.0016);
@@ -1159,6 +1428,21 @@
     setupInput();
   }
 
+  function focusAgentFn(id) {
+    var a = agents[id];
+    if (!a) return;
+    followId = id;
+    var p = a.group.position;
+    startTween({ yaw: cam.yaw, pitch: 0.5, dist: 32, tx: p.x, ty: p.y + 2, tz: p.z }, 1.4);
+  }
+  function followAgentFn(id) {
+    if (!agents[id]) return;
+    followId = id;
+    var p = agents[id].group.position;
+    startTween({ yaw: cam.yaw, pitch: 0.45, dist: 30, tx: p.x, ty: p.y + 2, tz: p.z }, 1.4);
+  }
+  function unfollowFn() { followId = null; }
+
   // ---------- public API ----------
   window.Island = {
     init: init,
@@ -1167,23 +1451,24 @@
 
     toggleOverview: function () {
       overview = !overview;
+      followId = null;
       startTween(overview ? OVERVIEW_VIEW : DEFAULT_VIEW, 1.6);
     },
     resetView: function () {
       overview = false;
+      followId = null;
       startTween(DEFAULT_VIEW, 1.4);
     },
     zoom: function (d) {
       tween = null;
-      cam.dist = clamp(cam.dist * d, 30, 170);
+      cam.dist = clamp(cam.dist * d, 10, 170);
     },
 
-    focusAgent: function (id) {
-      var a = agents[id];
-      if (!a) return;
-      var p = a.group.position;
-      startTween({ yaw: cam.yaw, pitch: 0.5, dist: 42, tx: p.x, ty: p.y + 2, tz: p.z }, 1.4);
-    },
+    focusAgent: focusAgentFn,
+    followAgent: followAgentFn,
+    unfollow: unfollowFn,
+    faceToward: faceToward,
+    agentSpeak: agentSpeak,
     focusPlace: function (x, z) {
       startTween({ yaw: cam.yaw, pitch: 0.55, dist: 48, tx: x, ty: 1.0 + groundHeight(x, z) + 2, tz: z }, 1.4);
     },
@@ -1191,7 +1476,7 @@
       tween = null;
       cam.yaw = yaw;
       cam.pitch = clamp(pitch, 0.15, 1.2);
-      cam.dist = clamp(dist, 30, 170);
+      cam.dist = clamp(dist, 10, 170);
       cam.tx = tx; cam.ty = ty; cam.tz = tz;
     },
 

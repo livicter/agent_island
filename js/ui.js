@@ -218,6 +218,7 @@
           : "Ask me anything about the island.");
       log.appendChild(g);
       log.scrollTop = log.scrollHeight;
+      if (window.Island && window.Island.agentSpeak) { try { window.Island.agentSpeak(id, "Hi, I'm " + agent.name + "!", 2500); } catch (e) {} }
     }
     if (input) input.focus();
   }
@@ -253,6 +254,7 @@
     function show(r) {
       if (r === undefined || r === null || r === "") return;
       addBubble("bubble-agent", String(r));
+      if (window.Island && window.Island.agentSpeak) { try { window.Island.agentSpeak(chatAgentId, String(r), 4500); } catch (e) {} }
     }
     if (reply && typeof reply.then === "function") {
       reply.then(show);
@@ -405,7 +407,11 @@
       });
     }
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") closeBring();
+      if (e.key === "Escape") {
+        closeBring();
+        closeChat();
+        if (window.Island && window.Island.unfollow) window.Island.unfollow();
+      }
     });
 
     // toolbar
@@ -500,6 +506,7 @@
     refreshResidents: refreshResidents,
     refreshPlaces: refreshPlaces,
     openChat: openChat,
+    closeChat: closeChat,
     togglePhoto: togglePhoto,
     toggleCinematic: toggleCinematic,
     tick: tick,

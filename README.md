@@ -27,11 +27,12 @@ Demo deep links: `?tod=22.5` freezes the time of day (0–24h clock),
 ## Demo
 
 ![Day](docs/screenshot-day.png)
+![Residents](docs/screenshot-characters.png)
 ![Night](docs/screenshot-night.png)
 ![Golden hour](docs/screenshot-golden.png)
 ![Blue hour](docs/screenshot-bluehour.png)
 
-Video walkthrough (slow morning orbit around the island):
+Video walkthrough (residents walking, talking, and the follow camera):
 [docs/demo.webm](docs/demo.webm)
 
 ### Look & feel
@@ -46,6 +47,14 @@ lollipop trees, and palms; sparkles drift by day, lamps and fireflies glow by ni
 The HUD mirrors the reference layout: island identity top-left, view/watcher pills
 top-right, happening + recap cards on the left, residents/places bar bottom-center,
 and a vertical toolbar on the right.
+
+The residents are fully animated: they walk with a swinging stride (arms and legs
+in opposition, body bob and sway, leaning into turns), idle with breathing,
+blinking, look-arounds and the occasional wave, and talk with a flapping mouth,
+head nods, and a floating speech bubble — they turn to face you while chatting.
+Selecting a resident (click them or pick from the residents bar) smoothly follows
+them at close range; clicking empty ground, pressing Esc, or closing the chat
+releases the camera. Name pills keep a constant on-screen size at any zoom.
 
 ## What you can do
 
