@@ -36,10 +36,10 @@ window.ISLE = {
 
   happenings: [
     "The Open Workshop",
-    "Lantern Lighting at the Café",
-    "Night Market by the Dock",
+    "Lantern Lighting at Grom's place",
+    "Night Market at Silas Marchetti's place",
     "Moth Trail Expedition",
-    "Story Circle in the Garden",
+    "Story Circle at gitlawb corner",
   ],
 
   storyTemplates: [
