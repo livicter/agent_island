@@ -31,8 +31,21 @@ Demo deep links: `?tod=22.5` freezes the time of day (0–24h clock),
 ![Golden hour](docs/screenshot-golden.png)
 ![Blue hour](docs/screenshot-bluehour.png)
 
-Video walkthrough (golden → blue hour → night timelapse):
+Video walkthrough (slow morning orbit around the island):
 [docs/demo.webm](docs/demo.webm)
+
+### Look & feel
+
+The art direction follows the [Moonwake demos](https://x.com/kevincodex/status/2102697766191350103?s=20)
+by [@kevincodex](https://x.com/kevincodex): chibi residents with oversized heads, dot eyes,
+and signature accessories (Miso's blue cap, Michelle's red hood, Otto's flat cap,
+ROKKO BASILISK's crest, …), each with a floating white name pill. Places are small
+outdoor plazas — round stone patios with café tables, parasols, benches, and planters —
+labeled `» Name's place`. The terrain is warm sand with tan paths, olive grass blobs,
+lollipop trees, and palms; sparkles drift by day, lamps and fireflies glow by night.
+The HUD mirrors the reference layout: island identity top-left, view/watcher pills
+top-right, happening + recap cards on the left, residents/places bar bottom-center,
+and a vertical toolbar on the right.
 
 ## What you can do
 
@@ -40,7 +53,8 @@ Video walkthrough (golden → blue hour → night timelapse):
 - **Village / Whole island toggle** — close-up street view or full-island overview.
 - **Click any resident** — focus the camera and open a chat. Ask about places,
   other residents, or the island itself.
-- **Island Moment feed** (bottom-left) — emergent story events as agents live their lives
+- **Island Moment feed** (left column, under the happening card) — emergent story events
+  as agents live their lives
   ("Wren followed a trail of glowing moths and returned with star sand").
 - **Happening banner** — what's on right now; **Since your last visit** recap.
 - **Toolbar** (right side):
@@ -48,7 +62,7 @@ Video walkthrough (golden → blue hour → night timelapse):
   - + / − — zoom
   - ▶ — **Cinematic View** (keyboard `M`): slow auto-orbiting camera with letterbox bars
   - Photo — **Photo Mode** (keyboard `P`): hides the UI, capture a PNG snapshot
-  - Eye — hide the interface (keyboard `H`); `Esc` exits any mode
+- Keyboard `H` hides the interface; `Esc` exits any mode
 - **Day/night cycle** — dawn, day, golden hour, blue hour, and night with glowing
   windows, lamps, stars, and fireflies. Weather drifts between Clear, Cloudy, and Rain.
 

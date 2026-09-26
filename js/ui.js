@@ -10,15 +10,15 @@
   var residentsTimer = null;
   var chatAgentId = null;
 
-  // Panels hidden by the "hide UI" toolbar toggle. The toolbar itself and the
-  // topnav stay visible so the user can always bring the panels back.
+  // Panels hidden by the "hide UI" keyboard toggle ("h"). The toolbar itself
+  // stays visible so the user can always bring the panels back.
   var PANEL_IDS = [
-    "island-card",
-    "happening",
+    "brand",
+    "topright",
+    "leftcol",
+    "bottombar",
     "residents",
-    "feed",
     "places",
-    "viewtoggle",
   ];
 
   function has(mod) {
@@ -87,6 +87,25 @@
       });
       list.appendChild(row);
     });
+    updateAvatarStack(agents);
+    var count = agents.length + " connected agents";
+    var rc = $("resident-count");
+    if (rc) rc.textContent = count;
+    var ac = $("agent-count");
+    if (ac) ac.textContent = count;
+  }
+
+  // avatar stack in the bottom bar: first 8 resident colors as circles
+  function updateAvatarStack(agents) {
+    var av = $("avatars");
+    if (!av) return;
+    av.innerHTML = "";
+    agents.slice(0, 8).forEach(function (a) {
+      var c = el("span", "avatar");
+      c.style.background = cssColor(a.color);
+      c.title = a.name;
+      av.appendChild(c);
+    });
   }
 
   /* ---------------- places ---------------- */
@@ -119,10 +138,10 @@
     card.appendChild(el("span", "moment-time", "just now"));
     card.style.transition = "opacity 0.5s ease";
     moments.insertBefore(card, moments.firstChild);
-    // cap at 4 cards; older ones fade out
+    // cap at 2 visible cards; older ones fade out
     var kids = moments.children;
     for (var i = 0; i < kids.length; i++) {
-      if (i > 3) {
+      if (i > 1) {
         (function (gone) {
           gone.style.opacity = "0";
           setTimeout(function () {
@@ -130,7 +149,7 @@
           }, 500);
         })(kids[i]);
       } else {
-        kids[i].style.opacity = String(1 - i * 0.18);
+        kids[i].style.opacity = String(1 - i * 0.3);
       }
     }
   }
@@ -158,8 +177,13 @@
   }
 
   function setWatchers(n) {
+    n = n == null ? 0 : n;
     var w = $("watchers");
-    if (w) w.textContent = (n == null ? 0 : n) + " watching now";
+    if (w) w.textContent = n + " watching now";
+    var v = $("visitors");
+    if (v)
+      v.textContent =
+        (2850 + n * 3).toLocaleString("en-US") + " total visitors";
   }
 
   /* ---------------- chat ---------------- */
@@ -312,21 +336,23 @@
     // places
     refreshPlaces();
 
-    // topnav tabs
-    var tabs = document.querySelectorAll("#topnav .tab");
-    Array.prototype.forEach.call(tabs, function (tab) {
-      tab.addEventListener("click", function () {
-        var name = (tab.textContent || "").trim().toLowerCase();
-        if (name === "island") {
-          Array.prototype.forEach.call(tabs, function (t) {
-            t.classList.remove("active");
-          });
-          tab.classList.add("active");
-        } else {
-          toast("Following/Journal are coming soon in this demo");
-        }
+    // bottom-bar toggles: floating cards above the bar
+    var meetBtn = $("meet-btn");
+    var resPanel = $("residents");
+    var placesBtn = $("places-btn");
+    var placesPanel = $("places");
+    if (meetBtn && resPanel) {
+      meetBtn.addEventListener("click", function () {
+        if (placesPanel) placesPanel.classList.add("hidden");
+        resPanel.classList.toggle("hidden");
       });
-    });
+    }
+    if (placesBtn && placesPanel) {
+      placesBtn.addEventListener("click", function () {
+        if (resPanel) resPanel.classList.add("hidden");
+        placesPanel.classList.toggle("hidden");
+      });
+    }
 
     // bring a muse: modal -> AgentAPI.register
     var bring = $("bring");
@@ -398,7 +424,6 @@
     });
     bind("t-cine", toggleCinematic);
     bind("t-photo", togglePhoto);
-    bind("t-hide", toggleHide);
 
     // view toggle
     var vv = $("v-village");

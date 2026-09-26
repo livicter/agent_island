@@ -75,20 +75,31 @@
     ctx.closePath();
   }
 
-  function makeLabelSprite(text, scale) {
+  function makeLabelSprite(text, scale, light) {
     var c = makeCanvas(256, 72);
     var ctx = c.getContext('2d');
-    ctx.fillStyle = 'rgba(10,16,32,0.62)';
-    roundedPill(ctx, 4, 10, 248, 52, 26);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 3;
-    roundedPill(ctx, 4, 10, 248, 52, 26);
-    ctx.stroke();
+    if (light) {
+      // Moonwake-style: white pill, dark text (for character names / place pills)
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      roundedPill(ctx, 4, 10, 248, 52, 26);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(30,35,50,0.14)';
+      ctx.lineWidth = 2;
+      roundedPill(ctx, 4, 10, 248, 52, 26);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = 'rgba(10,16,32,0.62)';
+      roundedPill(ctx, 4, 10, 248, 52, 26);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 3;
+      roundedPill(ctx, 4, 10, 248, 52, 26);
+      ctx.stroke();
+    }
     ctx.font = '600 30px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = light ? '#2a3040' : '#ffffff';
     ctx.fillText(text, 128, 38);
     var tex = new THREE.CanvasTexture(c);
     tex.anisotropy = 4;
@@ -349,10 +360,10 @@
       p.setY(i, groundHeight(x, z));
     }
     gg.computeVertexNormals();
-    var grass = new THREE.Mesh(gg, new THREE.MeshLambertMaterial({ color: '#5da24f', vertexColors: false }));
-    // subtle green variation via vertex colors
+    var grass = new THREE.Mesh(gg, new THREE.MeshLambertMaterial({ color: '#d9bd8a', vertexColors: false }));
+    // Moonwake look: sandy base with subtle variation (olive grass comes as scattered blobs)
     var cols = new Float32Array(p.count * 3);
-    var cA = new THREE.Color('#58a04b'), cB = new THREE.Color('#6fb257');
+    var cA = new THREE.Color('#d9bd8a'), cB = new THREE.Color('#cfae7c');
     for (var j = 0; j < p.count; j++) {
       var gx = p.getX(j), gz = p.getZ(j);
       var t = 0.5 + 0.5 * Math.sin(gx * 0.35 + gz * 0.5);
@@ -381,7 +392,7 @@
       if (len < 6) return;
       var geo = new THREE.PlaneGeometry(2.6, len - 6);
       geo.rotateX(-Math.PI / 2);
-      var m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: '#dccb9e' }));
+      var m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: '#c4a06e' }));
       var mx = dx / 2, mz = dz / 2;
       m.position.set(mx, 1.0 + groundHeight(mx, mz) + 0.09, mz);
       m.rotation.y = Math.atan2(dx, dz);
@@ -390,46 +401,162 @@
     });
   }
 
-  function buildHouse(pl) {
+  // Moonwake-style place label: white pill, dark text, "» " prefix.
+  // Like makeLabelSprite(light) but the canvas width is measured from the text,
+  // since makeLabelSprite's fixed 256px canvas clips longer names such as
+  // "» Delphine Roux's place" (~340px at 30px font).
+  function makePlaceLabel(text) {
+    var meas = makeCanvas(16, 72).getContext('2d');
+    meas.font = '600 30px system-ui, sans-serif';
+    var w = Math.ceil(meas.measureText(text).width) + 56;
+    var c = makeCanvas(w, 72);
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    roundedPill(ctx, 4, 10, w - 8, 52, 26);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(30,35,50,0.14)';
+    ctx.lineWidth = 2;
+    roundedPill(ctx, 4, 10, w - 8, 52, 26);
+    ctx.stroke();
+    ctx.font = '600 30px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#2a3040';
+    ctx.fillText(text, w / 2, 38);
+    var tex = new THREE.CanvasTexture(c);
+    tex.anisotropy = 4;
+    var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+    var h = 2.0;
+    sp.scale.set(h * (w / 72), h, 1);
+    return sp;
+  }
+
+  // Moonwake-style: small outdoor plaza — round stone patio disc, café tables,
+  // parasol umbrellas, benches, planters. No houses.
+  function buildPatio(pl) {
     var g = new THREE.Group();
     var gy = 1.0 + groundHeight(pl.x, pl.z);
-    var wallColor = new THREE.Color(pl.color || '#c98f5f');
+    var accent = new THREE.Color(pl.color != null ? pl.color : 0xffc46b);
+    var cream = new THREE.Color('#f3e7c8');
 
-    var walls = new THREE.Mesh(new THREE.BoxGeometry(4.6, 3, 4.2), new THREE.MeshLambertMaterial({ color: wallColor }));
-    walls.position.y = 1.5;
-    walls.castShadow = true; walls.receiveShadow = true;
-    g.add(walls);
+    function shadowed(mesh) { mesh.castShadow = true; mesh.receiveShadow = true; return mesh; }
 
-    var roof = new THREE.Mesh(new THREE.ConeGeometry(4.0, 2.4, 4), new THREE.MeshLambertMaterial({ color: '#8a4f36' }));
-    roof.position.y = 3 + 1.2;
-    roof.rotation.y = Math.PI / 4;
-    roof.castShadow = true;
-    g.add(roof);
+    // round stone patio disc
+    var disc = shadowed(new THREE.Mesh(
+      new THREE.CylinderGeometry(4.2, 4.35, 0.3, 36),
+      new THREE.MeshLambertMaterial({ color: '#ddd2b8' })
+    ));
+    disc.position.y = 0.02;
+    g.add(disc);
+    var topY = 0.17;
 
-    var door = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 2.0), new THREE.MeshLambertMaterial({ color: '#5a3a26' }));
-    door.position.set(0, 1.0, 2.11);
-    g.add(door);
+    // café tables: cylinder top + pole leg (2–3)
+    var tableCount = 2 + (Math.random() < 0.5 ? 1 : 0);
+    var tablePts = [];
+    var tableAngles = [0.6, 2.7, 4.5];
+    for (var ti = 0; ti < tableCount; ti++) {
+      var ta = tableAngles[ti] + Math.random() * 0.3;
+      var tr = 1.5 + Math.random() * 0.7;
+      var tx = Math.cos(ta) * tr, tz = Math.sin(ta) * tr;
+      tablePts.push({ x: tx, z: tz });
+      var leg = shadowed(new THREE.Mesh(
+        new THREE.CylinderGeometry(0.06, 0.08, 0.95, 8),
+        new THREE.MeshLambertMaterial({ color: '#6b5a44' })
+      ));
+      leg.position.set(tx, topY + 0.475, tz);
+      g.add(leg);
+      var top = shadowed(new THREE.Mesh(
+        new THREE.CylinderGeometry(0.68, 0.68, 0.08, 20),
+        new THREE.MeshLambertMaterial({ color: '#efe6cf' })
+      ));
+      top.position.set(tx, topY + 0.99, tz);
+      g.add(top);
+    }
 
-    // warm emissive windows
-    var winMat = new THREE.MeshLambertMaterial({ color: '#3a2c1c', emissive: new THREE.Color('#ffb347'), emissiveIntensity: 0.15 });
-    windows.push(winMat);
-    [-1.5, 1.5].forEach(function (wx) {
-      var w = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), winMat);
-      w.position.set(wx, 1.9, 2.11);
-      g.add(w);
-      var w2 = w.clone();
-      w2.rotation.y = Math.PI;
-      w2.position.z = -2.11;
-      g.add(w2);
+    // parasol umbrellas over 1–2 tables: thin pole + cone canopy (accent, alternating cream)
+    var umbCount = Math.min(tablePts.length, 1 + (Math.random() < 0.5 ? 1 : 0));
+    var strMat = new THREE.MeshLambertMaterial({
+      color: '#fff2c8', emissive: new THREE.Color('#ffca7a'), emissiveIntensity: 0.15
     });
+    windows.push(strMat); // brightens at night via the existing lamp code
+    for (var ui = 0; ui < umbCount; ui++) {
+      var tp = tablePts[ui];
+      var ux = tp.x + 0.85, uz = tp.z + 0.35;
+      var pole = shadowed(new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.06, 2.9, 8),
+        new THREE.MeshLambertMaterial({ color: '#7a6248' })
+      ));
+      pole.position.set(ux, topY + 1.45, uz);
+      g.add(pole);
+      var canopy = shadowed(new THREE.Mesh(
+        new THREE.ConeGeometry(1.55, 0.8, 10),
+        new THREE.MeshLambertMaterial({ color: ui % 2 === 0 ? accent : cream })
+      ));
+      canopy.position.set(ux, topY + 3.05, uz);
+      g.add(canopy);
+      // string lights on the first umbrella pole: two tiny warm bulbs
+      if (ui === 0) {
+        [1.5, 2.15].forEach(function (by) {
+          var bulb = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), strMat);
+          bulb.position.set(ux + 0.12, topY + by, uz);
+          g.add(bulb);
+        });
+      }
+    }
+
+    // benches: box seat + legs (1–2)
+    var benchCount = 1 + (Math.random() < 0.5 ? 1 : 0);
+    for (var bi = 0; bi < benchCount; bi++) {
+      var ba = 3.4 + bi * 2.2 + Math.random() * 0.4;
+      var bench = new THREE.Group();
+      var seat = shadowed(new THREE.Mesh(
+        new THREE.BoxGeometry(1.9, 0.14, 0.55),
+        new THREE.MeshLambertMaterial({ color: '#a9805a' })
+      ));
+      seat.position.y = 0.55;
+      bench.add(seat);
+      [-0.75, 0.75].forEach(function (lx) {
+        var legB = shadowed(new THREE.Mesh(
+          new THREE.BoxGeometry(0.14, 0.55, 0.5),
+          new THREE.MeshLambertMaterial({ color: '#7a5a3c' })
+        ));
+        legB.position.set(lx, 0.275, 0);
+        bench.add(legB);
+      });
+      bench.position.set(Math.cos(ba) * 3.0, topY, Math.sin(ba) * 3.0);
+      bench.rotation.y = -ba + Math.PI / 2;
+      g.add(bench);
+    }
+
+    // planters: terracotta pot + green blob (2–3)
+    var potColors = [0xb5673f, 0xa85f3a, 0xc07a4a];
+    var leafColors = [0x4a7d3a, 0x5c9148, 0x3f7d44];
+    var planterCount = 2 + (Math.random() < 0.5 ? 1 : 0);
+    for (var pi = 0; pi < planterCount; pi++) {
+      var pa = 1.2 + pi * 2.4 + Math.random() * 0.4;
+      var px = Math.cos(pa) * 3.55, pz = Math.sin(pa) * 3.55;
+      var pot = shadowed(new THREE.Mesh(
+        new THREE.CylinderGeometry(0.34, 0.26, 0.5, 12),
+        new THREE.MeshLambertMaterial({ color: potColors[pi % 3] })
+      ));
+      pot.position.set(px, topY + 0.25, pz);
+      g.add(pot);
+      var bush = shadowed(new THREE.Mesh(
+        new THREE.SphereGeometry(0.5, 12, 10),
+        new THREE.MeshLambertMaterial({ color: leafColors[pi % 3] })
+      ));
+      bush.scale.y = 0.75;
+      bush.position.set(px, topY + 0.62, pz);
+      g.add(bush);
+    }
 
     g.position.set(pl.x, gy, pl.z);
     g.rotation.y = Math.atan2(-pl.x, -pl.z); // face plaza
     scene.add(g);
 
-    // floating name label
-    var label = makeLabelSprite(pl.name || pl.id || 'Place');
-    label.position.set(pl.x, gy + 7.2, pl.z);
+    // floating white pill label
+    var label = makePlaceLabel('» ' + (pl.name || pl.id || 'Place'));
+    label.position.set(pl.x, gy + 6, pl.z);
     scene.add(label);
     labelSprites.push(label);
   }
@@ -495,23 +622,160 @@
     scene.add(g);
   }
 
-  function scatterPalms() {
+  // shared placement rule: keep clear of every place patio
+  function clearOfPlaces(x, z, minD) {
     var places = CFG.places || [];
+    for (var i = 0; i < places.length; i++) {
+      var dx = x - places[i].x, dz = z - places[i].z;
+      if (dx * dx + dz * dz < minD * minD) return false;
+    }
+    return true;
+  }
+
+  function scatterPalms() {
     var placed = 0, tries = 0;
     while (placed < 24 && tries < 400) {
       tries++;
       var a = Math.random() * Math.PI * 2;
       var r = 9 + Math.random() * (R - 13);
       var x = Math.cos(a) * r, z = Math.sin(a) * r;
-      var ok = true;
-      for (var i = 0; i < places.length; i++) {
-        var dx = x - places[i].x, dz = z - places[i].z;
-        if (dx * dx + dz * dz < 36) { ok = false; break; }
-      }
-      if (!ok) continue;
+      if (!clearOfPlaces(x, z, 6)) continue;
       buildPalm(x, z);
       placed++;
     }
+  }
+
+  // lollipop tree: thin brown trunk + 1–3 dark-green sphere canopy
+  function buildLollipop(x, z) {
+    var g = new THREE.Group();
+    var gy = 1.0 + groundHeight(x, z);
+    var s = 0.85 + Math.random() * 0.45;
+    var trunk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.15, 2.5, 7),
+      new THREE.MeshLambertMaterial({ color: '#7a5a38' })
+    );
+    trunk.position.y = 1.25;
+    trunk.castShadow = true;
+    g.add(trunk);
+    var puffs = 1 + Math.floor(Math.random() * 3);
+    var greens = [0x3f7d44, 0x478a4b, 0x39703d];
+    for (var i = 0; i < puffs; i++) {
+      var pr = 0.9 + Math.random() * 0.4;
+      var puff = new THREE.Mesh(
+        new THREE.SphereGeometry(pr, 14, 12),
+        new THREE.MeshLambertMaterial({ color: greens[i % 3] })
+      );
+      puff.position.set((Math.random() - 0.5) * 1.2, 2.7 + Math.random() * 0.9, (Math.random() - 0.5) * 1.2);
+      puff.castShadow = true; puff.receiveShadow = true;
+      g.add(puff);
+    }
+    g.position.set(x, gy, z);
+    g.scale.setScalar(s);
+    g.rotation.y = Math.random() * Math.PI * 2;
+    scene.add(g);
+  }
+
+  function scatterLollipops() {
+    var placed = 0, tries = 0;
+    while (placed < 14 && tries < 300) {
+      tries++;
+      var a = Math.random() * Math.PI * 2;
+      var r = 9 + Math.random() * (R - 13);
+      var x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (!clearOfPlaces(x, z, 6)) continue;
+      buildLollipop(x, z);
+      placed++;
+    }
+  }
+
+  // distance from (x,z) to the nearest place path strip (center -> place)
+  function distToPaths(x, z) {
+    var places = CFG.places || [];
+    var best = 1e9;
+    for (var i = 0; i < places.length; i++) {
+      var px = places[i].x, pz = places[i].z;
+      var len2 = px * px + pz * pz;
+      var t = len2 > 0 ? (x * px + z * pz) / len2 : 0;
+      t = clamp(t, 0, 1);
+      var dx = x - px * t, dz = z - pz * t;
+      var d = Math.sqrt(dx * dx + dz * dz);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  // Moonwake olive-grass: scattered soft flattened blobs, half-sunk in the sand
+  function scatterGrassBlobs() {
+    var blobCols = [0x7a9a4e, 0x86a854, 0x8fae5a];
+    var placedPts = [];
+    var placed = 0, tries = 0;
+    while (placed < 26 && tries < 600) {
+      tries++;
+      var a = Math.random() * Math.PI * 2;
+      var r = 8 + Math.random() * (R - 12);
+      var x = Math.cos(a) * r, z = Math.sin(a) * r;
+      var br = 1.5 + Math.random() * 2.5; // scale 1.5–4
+      if (Math.sqrt(x * x + z * z) < 7 + br) continue;   // keep the center plaza clear
+      if (!clearOfPlaces(x, z, 6.5 + br)) continue;       // keep patios clear
+      if (distToPaths(x, z) < 2.0 + br) continue;         // keep paths clear
+      var ok = true;
+      for (var i = 0; i < placedPts.length; i++) {
+        var dx = x - placedPts[i].x, dz = z - placedPts[i].z;
+        if (dx * dx + dz * dz < 6.25) { ok = false; break; }
+      }
+      if (!ok) continue;
+      var blob = new THREE.Mesh(
+        new THREE.SphereGeometry(br, 14, 10),
+        new THREE.MeshLambertMaterial({ color: blobCols[placed % 3] })
+      );
+      blob.scale.y = 0.32;
+      blob.rotation.y = Math.random() * Math.PI * 2;
+      blob.position.set(x, 1.0 + groundHeight(x, z) - br * 0.05, z);
+      blob.receiveShadow = true;
+      scene.add(blob);
+      placedPts.push({ x: x, z: z });
+      placed++;
+    }
+  }
+
+  // ---------- daytime sparkles ----------
+  var sparkles = null, sparkBase = null, sparkPhase = null, sparkT = 0;
+  function buildSparkles() {
+    var n = 50;
+    var pos = new Float32Array(n * 3);
+    sparkBase = new Float32Array(n * 3);
+    sparkPhase = new Float32Array(n);
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2;
+      var r = 4 + Math.random() * (R - 8);
+      var x = Math.cos(a) * r, z = Math.sin(a) * r;
+      var y = 1.0 + groundHeight(x, z) + 2.5 + Math.random() * 5;
+      sparkBase[i * 3] = x; sparkBase[i * 3 + 1] = y; sparkBase[i * 3 + 2] = z;
+      sparkPhase[i] = Math.random() * 6.28;
+      pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    sparkles = new THREE.Points(g, new THREE.PointsMaterial({
+      color: 0xfff3cf, size: 0.5, transparent: true, opacity: 0.6,
+      depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    scene.add(sparkles);
+    // onTick is owned by the main loop; drift on a lightweight timer instead
+    setInterval(function () {
+      if (!sparkles) return;
+      sparkT += 0.09;
+      var p = sparkles.geometry.attributes.position;
+      for (var i = 0; i < p.count; i++) {
+        var ph = sparkPhase[i];
+        p.setX(i, sparkBase[i * 3] + Math.sin(sparkT * 0.45 + ph) * 2.2);
+        p.setY(i, sparkBase[i * 3 + 1] + Math.sin(sparkT * 0.7 + ph * 1.7) * 0.9);
+        p.setZ(i, sparkBase[i * 3 + 2] + Math.cos(sparkT * 0.35 + ph) * 2.2);
+      }
+      p.needsUpdate = true;
+      // visible in day, fading out at night when the fireflies take over
+      sparkles.material.opacity = (1 - nightF) * (0.4 + 0.25 * Math.sin(sparkT * 1.8));
+    }, 90);
   }
 
   function buildClouds() {
@@ -631,11 +895,10 @@
   }
 
   // ---------- agent figures ----------
-  function addAgentMesh(id, colorHex, name) {
-    if (agents[id]) removeAgentMesh(id);
+  // Legacy capsule figure kept as a fallback when window.Chibi is unavailable.
+  function buildLegacyAgentMesh(colorHex) {
     var g = new THREE.Group();
     var col = new THREE.Color(colorHex || '#66aaff');
-
     var body = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.5, 0.85, 4, 12),
       new THREE.MeshLambertMaterial({ color: col })
@@ -643,7 +906,6 @@
     body.position.y = 1.15;
     body.castShadow = true;
     g.add(body);
-
     var head = new THREE.Mesh(
       new THREE.SphereGeometry(0.36, 14, 12),
       new THREE.MeshLambertMaterial({ color: 0xf2c89b })
@@ -651,33 +913,46 @@
     head.position.y = 2.15;
     head.castShadow = true;
     g.add(head);
-
-    // eyes
     var eyeMat = new THREE.MeshBasicMaterial({ color: 0x1c1c22 });
     [-0.13, 0.13].forEach(function (ex) {
       var eye = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), eyeMat);
       eye.position.set(ex, 2.2, 0.32);
       g.add(eye);
     });
-
-    // status ring at feet
     var ringMat = new THREE.MeshBasicMaterial({ color: 0x7fe07f, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
     var ring = new THREE.Mesh(new THREE.RingGeometry(0.62, 0.92, 28), ringMat);
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.12;
     g.add(ring);
+    g.userData.body = body;
+    g.userData.head = head;
+    g.userData.ringMat = ringMat;
+    return g;
+  }
 
-    var label = makeLabelSprite(name || id, 0.72);
-    label.position.y = 3.15;
+  function addAgentMesh(id, colorHex, name) {
+    if (agents[id]) removeAgentMesh(id);
+    var g;
+    if (window.Chibi && window.Chibi.defFor && window.Chibi.build) {
+      try {
+        g = window.Chibi.build(window.Chibi.defFor(name || id, colorHex));
+      } catch (e) { g = null; }
+    }
+    if (!g) g = buildLegacyAgentMesh(colorHex);
+
+    // Moonwake-style white name pill floating above the head
+    var label = makeLabelSprite(name || id, 0.72, true);
+    label.position.y = 3.1;
     g.add(label);
 
     g.userData.agentId = id;
-    g.userData.body = body;
-    g.userData.head = head;
+    // record rest heights so the per-frame bobbing matches this figure type
+    if (g.userData.body) g.userData.baseBodyY = g.userData.body.position.y;
+    if (g.userData.head) g.userData.baseHeadY = g.userData.head.position.y;
     var sx = 0, sz = 0;
     g.position.set(sx, 1.0 + groundHeight(sx, sz), sz);
     scene.add(g);
-    agents[id] = { group: g, ringMat: ringMat, phase: Math.random() * 6.28, status: 'idle', heading: 0 };
+    agents[id] = { group: g, ringMat: g.userData.ringMat || null, phase: Math.random() * 6.28, status: 'idle', heading: 0 };
     return g;
   }
 
@@ -697,7 +972,7 @@
     var a = agents[id];
     if (!a) return;
     a.status = status;
-    a.ringMat.color.set(status === 'working' ? 0xffb347 : 0x7fe07f);
+    if (a.ringMat) a.ringMat.color.set(status === 'working' ? 0xffb347 : 0x7fe07f);
   }
 
   function removeAgentMesh(id) {
@@ -789,14 +1064,17 @@
       L.glow.scale.set(3.2 * f, 3.2 * f, 1);
     });
 
-    // agent bobbing
+    // agent bobbing (base heights vary per figure type: chibi vs legacy)
     Object.keys(agents).forEach(function (id) {
       var a = agents[id];
       var speed = a.status === 'working' ? 9 : 3.2;
       var amp = a.status === 'working' ? 0.13 : 0.05;
       var b = Math.sin(t * speed + a.phase) * amp;
-      a.group.userData.body.position.y = 1.15 + b;
-      a.group.userData.head.position.y = 2.15 + b * 1.15;
+      var ub = a.group.userData;
+      var baseBodyY = (ub.baseBodyY !== undefined) ? ub.baseBodyY : 1.15;
+      var baseHeadY = (ub.baseHeadY !== undefined) ? ub.baseHeadY : 1.55;
+      ub.body.position.y = baseBodyY + b;
+      ub.head.position.y = baseHeadY + b * 1.15;
     });
 
     // labels face camera automatically (sprites); scale labels by distance is handled by sprite sizeAttenuation
@@ -860,12 +1138,15 @@
 
     var places = CFG.places || [];
     places.forEach(function (pl) {
-      buildHouse(pl);
+      buildPatio(pl);
       // lamp offset beside each place
       var lx = pl.x + 4.2, lz = pl.z + 2.4;
       buildLamp(lx, lz);
     });
     scatterPalms();
+    scatterLollipops();
+    scatterGrassBlobs();
+    buildSparkles();
     buildClouds();
     buildRain();
     buildFireflies();
