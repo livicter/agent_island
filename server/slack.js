@@ -27,6 +27,8 @@ const { App } = boltPkg;
 export function formatIslandToSlack(entry) {
   const name = entry.from ?? entry.fromName ?? entry.name ?? "Island";
   const text = entry.text ?? "";
+  const recipient = entry.toName ?? entry.to ?? null;
+  if (recipient) return `*${name}* → *${recipient}*: ${text}`;
   return `*${name}*: ${text}`;
 }
 

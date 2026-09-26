@@ -77,6 +77,7 @@ curl -s -X POST localhost:8902/leave \
 |----------------|---------|------------------------------------------------------|
 | `PORT`         | `8902`  | HTTP + WebSocket listen port                         |
 | `ISLAND_SECRET`| (unset) | If set, `/spawn` and WS `register` require it        |
+| `CONVO_INTERVAL_MS` | (unset) | If set, agent-to-agent conversations fire every N ms instead of the default jittered 25–60 s (useful for testing) |
 
 Example: `ISLAND_SECRET=s3cret PORT=8902 node index.js`
 
@@ -94,6 +95,8 @@ Base: `http://host:8902`. All responses are JSON. Errors: `{ "error": "..." }`.
 | POST   | `/move`     | `{ id, token, x, z }`                 | `{ ok }` (coords clamped to island)        |
 | POST   | `/spawn`    | `{ name, color, secret? }`            | `{ id, token, name }`                      |
 | POST   | `/leave`    | `{ id, token }`                       | `{ ok }`                                   |
+| POST   | `/admin/convo` | `?secret=` (if `ISLAND_SECRET` set) | `{ ok, a, b, lines }` — triggers one agent-to-agent conversation immediately (400 if fewer than 2 agents; 403 on bad secret) |
+| GET    | `/admin/snapshot` | `?secret=` (if `ISLAND_SECRET` set) | `{ ok, agents, path }` — saves world to disk |
 
 CORS is open (`Access-Control-Allow-Origin: *`) so browser clients can talk
 directly to the server.
@@ -117,7 +120,7 @@ Server → client broadcasts:
 |-----------|----------------------------------------------------------------|-----------|
 | `welcome` | `{ snapshot, serverTime }`                                     | on hello  |
 | `delta`   | `{ t, agents: [{ id, x, z, heading, state }] }` (changed only) | 10 Hz     |
-| `chat`    | `{ entry: { seq, t, fromId, fromName, text, kind } }`          | on message|
+| `chat`    | `{ entry: { seq, t, fromId, fromName, text, kind } }` (+ `toId`/`toName` on `convo` entries) | on message|
 | `story`   | `{ seq, t, text, a, b, place }`                               | ~25–45 s  |
 | `clock`   | `{ clock: { time, day, season, weather }, happening }`        | 6 s       |
 | `join`    | `{ agent }` (public fields)                                   | on spawn  |
@@ -129,6 +132,41 @@ its rule-based brain reply as a second `chat` entry (`kind: "brain"`).
 Viewers interpolate between `delta` frames; `x`/`z` are in island units
 (radius 40, walkable to 36).
 
+## Persistence
+
+The world is no longer in-memory only: the engine snapshots itself to
+`server/data/world.json` (plain JSON, versioned).
+
+**What is saved:** every agent's full record (`id`, `name`, `color`,
+`personality`, `x`/`z`, `tx`/`tz`, `speed`, `state`, `status`, `activity`,
+`pause`, `heading`, `external`), the tokens map (so external residents keep
+their auth tokens across restarts), the full chat log (up to its 200-entry
+cap), the story feed (up to 50), the message `seq`, clock fields
+(`gameMinutes`, `day`, `season`, `weather`, `happening`), and the three sim
+timers (`weatherTimer`, `happeningTimer`, `storyTimer`). A `version` field
+and a `savedAt` timestamp ride along.
+
+**When:** automatically every 30 s, on graceful shutdown (`SIGINT`/`SIGTERM`),
+and on demand via `GET /admin/snapshot` → `{ ok, agents, path }`. Writes are
+atomic (temp file + rename), so a crash mid-save never leaves a half-written
+file.
+
+**Restore:** on boot the engine loads `server/data/world.json` if it exists
+and parses with the right version — roster and external agents resume where
+they were, clock/timers/chat intact. No snapshot → fresh boot (14 roster
+agents, day 33, 07:15).
+
+**Corrupt snapshot:** logged with a one-line `[persist]` warning and ignored —
+the server boots fresh rather than crashing. (The next autosave/shutdown
+overwrites the bad file with a clean one.)
+
+**Auth:** if `ISLAND_SECRET` is set, `/admin/snapshot` requires
+`?secret=<ISLAND_SECRET>` (else 403). Without a secret it is open, like the
+other read endpoints.
+
+The snapshot directory `server/data/` is gitignored (`server/.gitignore`) —
+world state is local runtime data and is never committed.
+
 ## Game rules (authoritative)
 
 - 14 roster agents spawn at random places ±5. Wander: idle → pause 1–4 s →
@@ -136,7 +174,19 @@ Viewers interpolate between `delta` frames; `x`/`z` are in island units
   idle on arrival (pause 2–6 s).
 - Story events fire every 25–45 s from `storyTemplates` (`{a}`, `{b}`, `{p}`
   filled with two distinct non-external names + a place). Feed capped at 50.
-- Chat log capped at 200 entries (`kind`: `say` | `brain` | `system`).
+- Chat log capped at 200 entries (`kind`: `say` | `brain` | `system` | `convo`).
+- **Agent conversations**: every 25–60 s (jittered; override with
+  `CONVO_INTERVAL_MS` ms) the engine picks a pair of agents within ~8 units of
+  each other, preferring pairs where at least one agent is near a patio/place
+  (within ~7 of a place). Any agents — roster or external residents — may
+  participate. The pair faces each other, nearby agents (within 6 of the
+  midpoint) turn to watch, and a 2–4 line template exchange is emitted as
+  `convo` chat entries staggered ~2.5 s apart so speech bubbles alternate.
+  Each entry carries `fromId`/`fromName` plus `toId`/`toName` naming the other
+  participant; participants are re-faced toward each other before every line.
+  Templates live in `CONVO_TEMPLATES` in `engine.js` (`{a}`, `{b}`, `{p}`
+  placeholders; lines < 140 chars), with occasional personality-flavored
+  stage directions. `POST /admin/convo` triggers one exchange immediately.
 - Clock: 1 real second = 1 game minute, starts 07:15 on day 33, "Dry season".
   Weather drifts among Clear/Cloudy/Rain every 5–9 real minutes; the current
   happening rotates every 90 s.
@@ -149,8 +199,10 @@ Viewers interpolate between `delta` frames; `x`/`z` are in island units
   behind a router; there is no cross-process state.
 - `node --check` every file before shipping; `npm start` runs the server.
 - Health checks: `GET /health` → `{ ok: true }`.
-- State is in-memory only — restarts reset the island (day 33, 07:15, fresh
-  roster). Persist snapshots to disk/DB if continuity matters (not built in).
+- State is persisted to `server/data/world.json` (autosave every 30 s +
+  graceful-shutdown save); restarts restore the island. Snapshots are local
+  runtime data and are gitignored. For a fresh world, stop the server and
+  delete `server/data/world.json`.
 - The `tick` loop is cheap (14–100s of agents); the 10 Hz delta loop only
   serializes agents that moved.
 

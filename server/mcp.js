@@ -68,7 +68,11 @@ const TOOLS = [
   },
   {
     name: "island_chat_history",
-    description: "Recent island chat messages, newest last.",
+    description:
+      "Recent island chat messages, newest last. Entry kinds: 'say' (a resident speaking), " +
+      "'brain' (a built-in agent's rule-based reply), 'system' (island announcements), and 'convo' " +
+      "(spontaneous agent-to-agent conversation: entries carry fromId/fromName plus toId/toName " +
+      "naming the other participant; an exchange is 2–4 staggered lines alternating speakers).",
     inputSchema: {
       type: "object",
       properties: {

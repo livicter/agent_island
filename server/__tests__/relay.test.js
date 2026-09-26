@@ -25,6 +25,27 @@ test("formatIslandToSlack falls back to Island name", () => {
   assert.equal(formatIslandToSlack({ text: "waves" }), "*Island*: waves");
 });
 
+test("formatIslandToSlack formats recipient as *A* → *B*: text", () => {
+  assert.equal(
+    formatIslandToSlack({ from: "Miso", toName: "Michelle", text: "soup?" }),
+    "*Miso* → *Michelle*: soup?"
+  );
+});
+
+test("formatIslandToSlack accepts legacy `to` key as recipient", () => {
+  assert.equal(
+    formatIslandToSlack({ from: "Pip", to: "bozo", text: "trade you tide glass" }),
+    "*Pip* → *bozo*: trade you tide glass"
+  );
+});
+
+test("formatIslandToSlack prefers toName over to", () => {
+  assert.equal(
+    formatIslandToSlack({ fromName: "Miso", toName: "Michelle", to: "Pip", text: "soup?" }),
+    "*Miso* → *Michelle*: soup?"
+  );
+});
+
 test("shouldRelaySlackEvent accepts a plain channel message", () => {
   const event = { type: "message", channel: CHANNEL, user: "U1", text: "hi there" };
   assert.equal(shouldRelaySlackEvent(event, CHANNEL), true);

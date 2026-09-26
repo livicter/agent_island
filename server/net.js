@@ -206,6 +206,21 @@ function start(engine, opts = {}) {
         engine.remove(body.id);
         return json(res, 200, { ok: true });
       }
+      if (req.method === 'POST' && path === '/admin/convo') {
+        if (SECRET && url.searchParams.get('secret') !== SECRET) {
+          return json(res, 403, { error: 'invalid secret' });
+        }
+        const convo = engine.triggerConversation();
+        if (!convo) return json(res, 400, { error: 'need at least 2 agents for a conversation' });
+        return json(res, 200, { ok: true, a: convo.a, b: convo.b, lines: convo.lines });
+      }
+      if (req.method === 'GET' && path === '/admin/snapshot') {
+        if (SECRET && url.searchParams.get('secret') !== SECRET) {
+          return json(res, 403, { error: 'invalid secret' });
+        }
+        engine.saveToDisk();
+        return json(res, 200, { ok: true, agents: engine.order.length, path: 'server/data/world.json' });
+      }
 
       return json(res, 404, { error: 'not found' });
     } catch (e) {

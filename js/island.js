@@ -1451,6 +1451,32 @@
     }, d);
   }
 
+  // floating speech bubble over an agent's head; reacts to another agent's
+  // speech (mouth movement + bubble) WITHOUT changing the agent's heading —
+  // used for conversation listeners so they keep facing the speaker per
+  // server heading deltas.
+  function agentReact(id, text, durMs) {
+    var a = agents[id];
+    if (!a) return;
+    var d = durMs || 3500;
+    a.talkT = d / 1000;
+    var div = getBubbleDiv(id);
+    if (!div) return;
+    div.textContent = String(text).slice(0, 140);
+    div.style.display = '';
+    div.style.visibility = '';
+    div.style.opacity = '1';
+    if (div._t) { clearTimeout(div._t); div._t = null; }
+    div._t = setTimeout(function () {
+      div.style.opacity = '0';
+      div._t = setTimeout(function () {
+        div.style.display = 'none';
+        div.style.opacity = '';
+        div._t = null;
+      }, 400);
+    }, d);
+  }
+
   var _bubbleV = null;
   // per-frame: pin each visible bubble above its agent's head
   function updateSpeechBubbles() {
@@ -1866,6 +1892,7 @@
     unfollow: unfollowFn,
     faceToward: faceToward,
     agentSpeak: agentSpeak,
+    agentReact: agentReact,
     focusPlace: function (x, z) {
       startTween({ yaw: cam.yaw, pitch: 0.55, dist: 48, tx: x, ty: 1.0 + groundHeight(x, z) + 2, tz: z }, 1.4);
     },

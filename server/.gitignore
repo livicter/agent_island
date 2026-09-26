@@ -1,0 +1,6 @@
+# Local persistence data — world snapshots. Never commit.
+data/
+data/*.json
+
+# Dependencies — install via npm.
+node_modules/

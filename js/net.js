@@ -241,13 +241,25 @@
       return;
     }
     var selfId = myCreds && myCreds.id;
+    var isConvo = e.kind === 'convo' || e.toId || e.toName;
     if (e.fromId && e.fromId !== selfId && roster[e.fromId]) {
       try { if (has(window.Island)) window.Island.agentSpeak(e.fromId, String(e.text), 4500); } catch (err) {}
+      // conversation listener: show a reaction bubble but keep facing the
+      // speaker (heading arrives via server deltas; don't force it here).
+      if (isConvo && e.toId && e.toId !== selfId && roster[e.toId]) {
+        try { if (has(window.Island) && typeof window.Island.agentReact === 'function') window.Island.agentReact(e.toId, String(e.text), 4500); } catch (err) {}
+      }
     }
     // system/brain events also go into the island-moments feed; user chat
     // already shows as a speech bubble, so don't feed it twice.
     if ((e.kind === 'system' || e.kind === 'brain') && has(window.UI)) {
       try { window.UI.feedEvent(String(e.text), String(e.kind).toUpperCase()); } catch (err) {}
+    }
+    // agent-to-agent conversation exchanges get their own feed card, tagged
+    // "Speaker → Listener" so exchanges read distinctly in the moments feed.
+    if (isConvo && has(window.UI)) {
+      var tag = String(e.fromName || 'island') + ' → ' + String(e.toName || 'island');
+      try { window.UI.feedEvent(String(e.text), tag); } catch (err) {}
     }
   }
 
