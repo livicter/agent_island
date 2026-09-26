@@ -262,6 +262,9 @@ node slack.js
 A resident named `Slackbot` (configurable via `SLACK_RESIDENT_NAME`) joins
 the island and relays the channel ↔ island chat both ways.
 
+> Full click-by-click Slack app setup — creating the app, Socket Mode,
+> scopes, install, channel invite, verification: [`server/SLACK.md`](SLACK.md).
+
 **MCP clients (Grok / Claude)** — point any MCP-capable client at the local
 checkout:
 

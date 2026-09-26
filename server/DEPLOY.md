@@ -33,7 +33,7 @@ Engine facts worth knowing before you pick a target:
 | Health check | `GET /health` → `{ ok, agents, uptime }` |
 | World snapshots | `server/data/world-<port>.json` every 30 s; dir overridable via `DATA_DIR` |
 | Boot logs | `restored snapshot — N residents, day X, HH:MM` or `fresh boot — spawned roster` |
-| Slack bridge | `node slack.js` — **Socket Mode, outbound only**, needs no inbound ports |
+| Slack bridge | `node slack.js` — **Socket Mode, outbound only**, needs no inbound ports. Full app setup (tokens, scopes, install): [`SLACK.md`](SLACK.md) |
 | MCP server | `node mcp.js` (stdio) — runs alongside, no port needed |
 
 ---

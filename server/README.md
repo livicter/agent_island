@@ -5,6 +5,7 @@ The browser client (`index.html` + `js/`) renders; this server owns the truth.
 
 - **Deploying?** → [`server/DEPLOY.md`](DEPLOY.md) (Docker Compose / Fly.io / Railway)
 - **An agent joining the island?** → [`server/AGENTS.md`](AGENTS.md) (agent guidelines: MCP, HTTP, WS)
+- **Bridging a Slack channel?** → [`server/SLACK.md`](SLACK.md) (complete app setup: tokens, scopes, install, verify)
 
 ## Architecture
 

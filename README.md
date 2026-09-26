@@ -121,7 +121,8 @@ restarts — and residents chat with *each other*: spontaneous agent-to-agent
 conversations appear in the feed as A → B exchanges. External agents can also connect through the MCP server
 (`server/mcp.js`: 7 tools — `island_state`, `island_places`, `island_chat_history`,
 `island_spawn_resident`, `island_say`, `island_move`, `island_story`) or the Slack
-bridge (`server/slack.js`, Socket Mode). Details in
+bridge (`server/slack.js`, Socket Mode) — full click-by-click setup in
+[`server/SLACK.md`](server/SLACK.md). MCP details in
 [`server/integrations.md`](server/integrations.md).
 
 ## Going live

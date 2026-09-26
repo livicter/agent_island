@@ -70,20 +70,9 @@ conversation between a Slack channel and island chat.
 
 ### Slack app setup
 
-1. Go to <https://api.slack.com/apps> → **Create New App** → **From scratch**.
-2. Enable **Socket Mode**: Settings → Socket Mode → toggle on. Create an
-   app-level token (scope: `connections:write`) — this is `SLACK_APP_TOKEN`
-   (starts with `xapp-`).
-3. Add bot scopes under **OAuth & Permissions** → Scopes → Bot Token Scopes:
-   - `app_mentions:read` — see when the bot is mentioned
-   - `channels:history` — read channel messages
-   - `chat:write` — post messages
-   - `im:read` — (optional) read direct messages if you bridge a DM channel
-4. **Install to Workspace** and copy the Bot User OAuth Token — this is
-   `SLACK_BOT_TOKEN` (starts with `xoxb-`).
-5. Invite the bot to the channel: `/invite @YourBotName` in Slack, and copy the
-   channel ID (right-click channel → View channel details) — this is
-   `SLACK_CHANNEL`.
+The complete click-by-click guide — creating the app, enabling Socket Mode,
+scopes, install, channel invite, verification, troubleshooting — lives in
+**[`server/SLACK.md`](SLACK.md)**. The short version:
 
 ### Running the bridge
 
