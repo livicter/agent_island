@@ -35,6 +35,12 @@
   var lamps = [];             // { meshMat, glowMat }
   var lampLights = [];        // real PointLights (first few lamps only)
   var windows = [];           // emissive window materials
+  var cottageWindows = [];    // { mat, glowMat } — cottage window panes, glow at night
+  var lanterns = [];          // { bulbMat, glowMat, bloomMat } — path lantern posts
+  var shaftMat = null;        // golden-hour light shaft material (uIntensity animated)
+  var waterUniforms = null;   // injected water shader uniforms (glints, fresnel)
+  var bloomLampGlows = [];    // per-lamp glow-caster sprites in the bloom layer
+  var bloomMoonGlow = null, bloomSunGlow = null, bloomFireflies = null, bloomGlint = null;
   var labelSprites = [];
   var agents = {};            // id -> { group, ringMat, nameSprite, phase, status, heading }
   var weatherMode = 'Clear';
@@ -267,6 +273,59 @@
     lampLights.forEach(function (pl) { pl.intensity = lampF * 1.6; });
     windows.forEach(function (m) { m.emissiveIntensity = li; });
 
+    // selective bloom: gentle by day, a touch stronger at night (never touches the main render)
+    if (window.GlowBloom) {
+      window.GlowBloom.setStrength((0.45 + nightF * 0.55) * (0.7 + 0.3 * mute));
+    }
+    // cottage windows glow warm at night
+    cottageWindows.forEach(function (w) {
+      w.mat.color.copy(cottageWinDay).lerp(cottageWinNight, nightF);
+      if (w.glowMat) w.glowMat.opacity = 0.03 + nightF * 0.26;
+    });
+    // lantern posts burn with the lamps (main-scene glow only)
+    lanterns.forEach(function (L) {
+      L.bulbMat.emissiveIntensity = 0.4 + lampF * 2.4;
+      L.glowMat.opacity = 0.08 + lampF * 0.5;
+    });
+    // golden-hour light shafts + a fatter sun glow
+    var sunElev = Math.sin((curTOD - 6) / 12 * Math.PI); // 1 noon, 0 at 6h/18h
+    var shaftF = clamp(1 - Math.abs(sunElev - 0.16) * 5.5, 0, 1) * (1 - nightF);
+    if (shaftMat) {
+      shaftMat.uniforms.uIntensity.value = shaftF * 0.05;
+      shaftMat.uniforms.uColor.value.copy(s.sunColor);
+    }
+    var ss = 150 * (1 + shaftF * 0.45);
+    sunSprite.scale.set(ss, ss, 1);
+    if (bloomSunGlow) {
+      bloomSunGlow.material.opacity = sunF * (0.30 + shaftF * 0.40);
+      var bs = 150 * (1 + shaftF * 0.5);
+      bloomSunGlow.scale.set(bs, bs, 1);
+    }
+    if (bloomMoonGlow) bloomMoonGlow.material.opacity = clamp(nightF * 1.2, 0, 1) * 0.55;
+    // water shader: sun/moon glint paths + fresnel sky tint
+    if (waterUniforms) {
+      waterUniforms.uSunDir.value.set(sx, sy, 60).normalize();
+      waterUniforms.uMoonDir.value.set(mx, Math.max(my, 30), -140).normalize();
+      waterUniforms.uSunF.value = sunF;
+      waterUniforms.uNightF.value = nightF;
+      waterUniforms.uSunTint.value.copy(s.sunColor);
+      waterUniforms.uSkyTint.value.copy(s.skyBot).lerp(s.water, 0.5);
+    }
+    // water glint streaks in the bloom layer track the sun/moon azimuth
+    if (bloomGlint && bloomGlint.length === 2) {
+      var glR = 58;
+      var sdx = sx, sdz = 60, sl = Math.hypot(sdx, sdz) || 1;
+      var g0 = bloomGlint[0];
+      g0.mesh.position.set(sdx / sl * glR, -0.55, sdz / sl * glR);
+      g0.mesh.rotation.set(-Math.PI / 2, 0, Math.atan2(-sdz / sl, sdx / sl));
+      g0.mat.opacity = sunF * 0.5;
+      var mdx = mx, mdz = -140, ml = Math.hypot(mdx, mdz) || 1;
+      var g1 = bloomGlint[1];
+      g1.mesh.position.set(mdx / ml * glR, -0.55, mdz / ml * glR);
+      g1.mesh.rotation.set(-Math.PI / 2, 0, Math.atan2(-mdz / ml, mdx / ml));
+      g1.mat.opacity = nightF * 0.38;
+    }
+
     waterMesh.material.color.copy(s.water);
   }
 
@@ -344,6 +403,41 @@
     waterGeo = new THREE.PlaneGeometry(900, 900, 42, 42);
     waterGeo.rotateX(-Math.PI / 2);
     var mat = new THREE.MeshPhongMaterial({ color: '#2f7fc4', transparent: true, opacity: 0.92, shininess: 120, specular: 0x99ccee });
+    // sun/moon glint paths + fresnel sheen, injected into the phong shader
+    waterUniforms = {
+      uTime: { value: 0 },
+      uSunDir: { value: new THREE.Vector3(0, 1, 0) },
+      uMoonDir: { value: new THREE.Vector3(0, 1, 0) },
+      uSunF: { value: 1 },
+      uNightF: { value: 0 },
+      uSunTint: { value: new THREE.Color('#fff2dd') },
+      uMoonTint: { value: new THREE.Color('#bcd6ff') },
+      uSkyTint: { value: new THREE.Color('#b8dcf0') }
+    };
+    mat.onBeforeCompile = function (shader) {
+      Object.keys(waterUniforms).forEach(function (k) { shader.uniforms[k] = waterUniforms[k]; });
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNormal;')
+        .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvWNormal = normalize(mat3(modelMatrix) * objectNormal);')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNormal;\nuniform float uTime;\nuniform vec3 uSunDir;\nuniform vec3 uMoonDir;\nuniform float uSunF;\nuniform float uNightF;\nuniform vec3 uSunTint;\nuniform vec3 uMoonTint;\nuniform vec3 uSkyTint;')
+        .replace('#include <output_fragment>',
+          '{\n' +
+          ' vec3 Vv = normalize(cameraPosition - vWPos);\n' +
+          ' vec3 Nn = normalize(vWNormal + vec3(sin(vWPos.x * 0.55 + uTime * 1.2) * 0.06, 0.0, cos(vWPos.z * 0.62 - uTime * 0.9) * 0.06));\n' +
+          ' vec3 Rr = reflect(-Vv, Nn);\n' +
+          ' float sd = max(dot(Rr, uSunDir), 0.0);\n' +
+          ' float md = max(dot(Rr, uMoonDir), 0.0);\n' +
+          ' float sunGlint = pow(sd, 220.0) * 2.2 + pow(sd, 18.0) * 0.16;\n' +
+          ' float moonGlint = pow(md, 220.0) * 1.5 + pow(md, 18.0) * 0.10;\n' +
+          ' outgoingLight += uSunTint * sunGlint * uSunF;\n' +
+          ' outgoingLight += uMoonTint * moonGlint * uNightF;\n' +
+          ' float fres = pow(1.0 - max(dot(Vv, Nn), 0.0), 3.0);\n' +
+          ' outgoingLight = mix(outgoingLight, uSkyTint, fres * 0.40);\n' +
+          '}\n' +
+          '#include <output_fragment>');
+    };
     waterMesh = new THREE.Mesh(waterGeo, mat);
     waterMesh.position.y = -0.8;
     waterMesh.receiveShadow = true;
@@ -590,7 +684,7 @@
     g.add(glow);
     g.position.set(x, gy, z);
     scene.add(g);
-    lamps.push({ bulbMat: bulbMat, glowMat: glowMat, glow: glow, phase: Math.random() * 6.28 });
+    lamps.push({ bulbMat: bulbMat, glowMat: glowMat, glow: glow, phase: Math.random() * 6.28, x: x, y: gy + 3.6, z: z });
     // a few real point lights for warm pools of light at night (perf-capped)
     if (lampLights.length < 3) {
       var pl = new THREE.PointLight(0xffc37a, 0, 22, 2);
@@ -598,6 +692,294 @@
       scene.add(pl);
       lampLights.push(pl);
     }
+  }
+
+  // ---------- cozy cottages (Moonwake night reference: warm glowing windows) ----------
+  var cottageWinDay = new THREE.Color('#8d99a4');
+  var cottageWinNight = new THREE.Color('#ffd98a');
+
+  function buildCottage(x, z, rotY, bodyColor, roofColor) {
+    var g = new THREE.Group();
+    var gy = 1.0 + groundHeight(x, z);
+    function shadowed(m) { m.castShadow = true; m.receiveShadow = true; return m; }
+    var body = shadowed(new THREE.Mesh(
+      new THREE.BoxGeometry(3.4, 2.3, 3.0),
+      new THREE.MeshLambertMaterial({ color: bodyColor })
+    ));
+    body.position.y = 1.15;
+    g.add(body);
+    // pyramid roof with slight overhang
+    var roof = shadowed(new THREE.Mesh(
+      new THREE.CylinderGeometry(0.03, 2.55, 1.8, 4),
+      new THREE.MeshLambertMaterial({ color: roofColor, flatShading: true })
+    ));
+    roof.position.y = 2.3 + 0.9;
+    roof.rotation.y = Math.PI / 4;
+    roof.scale.set(1, 1, 0.92);
+    g.add(roof);
+    // chimney
+    var chim = shadowed(new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 1.3, 0.5),
+      new THREE.MeshLambertMaterial({ color: '#8a6a52' })
+    ));
+    chim.position.set(0.95, 3.7, 0.3);
+    g.add(chim);
+    // door
+    var door = new THREE.Mesh(
+      new THREE.BoxGeometry(0.85, 1.45, 0.12),
+      new THREE.MeshLambertMaterial({ color: '#6b4a33' })
+    );
+    door.position.set(0, 0.72, 1.51);
+    g.add(door);
+    // windows: warm panes, brighten at night via applyTimeOfDay
+    var winMat = new THREE.MeshBasicMaterial({ color: cottageWinDay.clone(), toneMapped: false });
+    [[-1.0, 1.45, 1.52, 0], [1.0, 1.45, 1.52, 0], [1.71, 1.45, 0, Math.PI / 2]].forEach(function (w) {
+      var pane = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.72), winMat);
+      pane.position.set(w[0], w[1], w[2]);
+      pane.rotation.y = w[3];
+      g.add(pane);
+      // cross frame
+      var frame = new THREE.Mesh(
+        new THREE.BoxGeometry(0.8, 0.08, 0.04),
+        new THREE.MeshLambertMaterial({ color: '#5a4632' })
+      );
+      frame.position.set(w[0], w[1], w[2] + (w[3] === 0 ? 0.02 : 0));
+      frame.rotation.y = w[3];
+      if (w[3] !== 0) frame.position.set(w[0] + 0.02, w[1], w[2]);
+      g.add(frame);
+    });
+    g.position.set(x, gy, z);
+    g.rotation.y = rotY;
+    scene.add(g);
+    // one shared window material per cottage; single bloom glow sprite
+    cottageWindows.push({ mat: winMat });
+    if (window.GlowBloom) {
+      var gm = new THREE.SpriteMaterial({
+        map: makeGlowTexture('rgba(255,205,120,0.95)', 'rgba(255,160,60,0)'),
+        transparent: true, opacity: 0.05, depthWrite: false, toneMapped: false
+      });
+      var gs = new THREE.Sprite(gm);
+      gs.position.set(x, gy + 1.9, z);
+      gs.scale.set(5.5, 5.5, 1);
+      window.GlowBloom.addCaster(gs);
+      cottageWindows[cottageWindows.length - 1].glowMat = gm;
+    }
+  }
+
+  function buildCottages() {
+    // hand-placed: clear of patios and path strips (verified against config places)
+    var defs = [
+      { x: -26, z: 4, body: '#f2e3c2', roof: '#b3563f' },
+      { x: 26, z: -12, body: '#dfe8d8', roof: '#5a6e8c' },
+      { x: 10, z: 30, body: '#f6d9c4', roof: '#a34a3a' },
+      { x: -30, z: -6, body: '#e3ddf0', roof: '#4e5e78' }
+    ];
+    defs.forEach(function (d) {
+      // face the door/windows toward the village center
+      buildCottage(d.x, d.z, Math.atan2(-d.x, -d.z), d.body, d.roof);
+    });
+  }
+
+  // ---------- path lantern posts ----------
+  function buildLantern(x, z) {
+    var g = new THREE.Group();
+    var gy = 1.0 + groundHeight(x, z);
+    var pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.07, 0.1, 2.6, 8),
+      new THREE.MeshLambertMaterial({ color: '#2c2c34' })
+    );
+    pole.position.y = 1.3;
+    pole.castShadow = true;
+    g.add(pole);
+    var cap = new THREE.Mesh(
+      new THREE.ConeGeometry(0.42, 0.3, 8),
+      new THREE.MeshLambertMaterial({ color: '#2c2c34' })
+    );
+    cap.position.y = 2.95;
+    g.add(cap);
+    var bulbMat = new THREE.MeshLambertMaterial({
+      color: '#ffe9b8', emissive: new THREE.Color('#ffb45e'), emissiveIntensity: 1.0
+    });
+    var bulb = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 10), bulbMat);
+    bulb.position.y = 2.62;
+    g.add(bulb);
+    var glowMat = new THREE.SpriteMaterial({
+      map: makeGlowTexture('rgba(255,200,120,0.9)', 'rgba(255,160,60,0)'),
+      transparent: true, opacity: 0.35, depthWrite: false
+    });
+    var glow = new THREE.Sprite(glowMat);
+    glow.scale.set(2.8, 2.8, 1);
+    glow.position.y = 2.62;
+    g.add(glow);
+    g.position.set(x, gy, z);
+    scene.add(g);
+    // bloom-layer caster intentionally omitted: the main-scene glow sprite
+    // above already gives the halo; a second caster stacked into white blobs.
+    lanterns.push({ bulbMat: bulbMat, glowMat: glowMat });
+  }
+
+  // ---------- small props: planters, crates, pebbles, grass tufts ----------
+  var propMats = null;
+  function getPropMats() {
+    if (!propMats) {
+      propMats = {
+        terra: new THREE.MeshLambertMaterial({ color: '#b06a45' }),
+        bush: new THREE.MeshLambertMaterial({ color: '#5d8a48' }),
+        wood: new THREE.MeshLambertMaterial({ color: '#a9805a' }),
+        woodDark: new THREE.MeshLambertMaterial({ color: '#7a5a3c' }),
+        pebble: new THREE.MeshLambertMaterial({ color: '#9a9a92' }),
+        tuft: new THREE.MeshLambertMaterial({ color: '#7da05a' })
+      };
+    }
+    return propMats;
+  }
+
+  function scatterProps() {
+    var M = getPropMats();
+    var places = CFG.places || [];
+    function put(mesh, x, z, sink) {
+      mesh.position.set(x, 1.0 + groundHeight(x, z) - (sink || 0), z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+    }
+    // lantern posts along the paths to a few places (offset from the path strip)
+    [['tidework'], ['cafe'], ['workshop'], ['dock']].forEach(function (pick) {
+      var pl = null;
+      places.forEach(function (p) { if (p.id === pick[0]) pl = p; });
+      if (!pl) return;
+      var len = Math.hypot(pl.x, pl.z) || 1;
+      var dx = pl.x / len, dz = pl.z / len;
+      var nx = -dz, nz = dx;
+      [[0.45, 1], [0.75, -1]].forEach(function (tt) {
+        buildLantern(pl.x * tt[0] + nx * 2.6 * tt[1], pl.z * tt[0] + nz * 2.6 * tt[1]);
+      });
+    });
+    // planters ringing patios
+    places.forEach(function (pl, pi) {
+      var a = 0.6 + pi * 1.7;
+      var px = pl.x + Math.cos(a) * 5.2, pz = pl.z + Math.sin(a) * 5.2;
+      var pot = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.38, 0.62, 10), M.terra);
+      put(pot, px, pz, -0.31);
+      var bush = new THREE.Mesh(new THREE.SphereGeometry(0.55, 10, 8), M.bush);
+      put(bush, px, pz, -0.75);
+    });
+    // crates near two patios
+    var crateSpots = [[4.5, 7.5, 0.3], [5.6, 6.8, 1.1], [5.1, 7.6, 0.7, true], [-11, -13.5, 0.9], [-10, -12.6, 0.2]];
+    crateSpots.forEach(function (c) {
+      var box = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.95, 0.95), c[3] ? M.woodDark : M.wood);
+      box.rotation.y = c[2];
+      put(box, c[0], c[1], c[3] ? -1.35 : -0.48);
+    });
+    // pebbles + grass tufts scattered, kept off paths and patios
+    var placed = 0, tries = 0;
+    while (placed < 14 && tries < 300) {
+      tries++;
+      var a = Math.random() * Math.PI * 2, r = 8 + Math.random() * (R - 12);
+      var x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (!clearOfPlaces(x, z, 4)) continue;
+      if (distToPaths(x, z) < 1.6) continue;
+      var s = 0.16 + Math.random() * 0.22;
+      var peb = new THREE.Mesh(new THREE.SphereGeometry(s, 8, 6), M.pebble);
+      peb.scale.y = 0.55;
+      put(peb, x, z, -s * 0.25);
+      placed++;
+    }
+    placed = 0; tries = 0;
+    while (placed < 18 && tries < 400) {
+      tries++;
+      var a2 = Math.random() * Math.PI * 2, r2 = 8 + Math.random() * (R - 12);
+      var x2 = Math.cos(a2) * r2, z2 = Math.sin(a2) * r2;
+      if (Math.sqrt(x2 * x2 + z2 * z2) < 7) continue;
+      if (!clearOfPlaces(x2, z2, 4)) continue;
+      if (distToPaths(x2, z2) < 1.1) continue;
+      var tuft = new THREE.Group();
+      for (var k = 0; k < 3; k++) {
+        var blade = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.75, 6), M.tuft);
+        blade.position.set((Math.random() - 0.5) * 0.3, 0.32, (Math.random() - 0.5) * 0.3);
+        blade.rotation.set((Math.random() - 0.5) * 0.5, 0, (Math.random() - 0.5) * 0.5);
+        blade.castShadow = true;
+        tuft.add(blade);
+      }
+      put(tuft, x2, z2, -0.05);
+      placed++;
+    }
+  }
+
+  // ---------- golden-hour light shafts (cheap fake volumetrics) ----------
+  function buildShafts() {
+    shaftMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uColor: { value: new THREE.Color('#ffca7a') },
+        uIntensity: { value: 0 }
+      },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader:
+        'uniform vec3 uColor; uniform float uIntensity; varying vec2 vUv;' +
+        'void main(){' +
+        ' float a = smoothstep(0.0, 0.35, vUv.y) * (1.0 - smoothstep(0.55, 1.0, vUv.y));' +
+        ' a *= smoothstep(0.0, 0.3, vUv.x) * (1.0 - smoothstep(0.7, 1.0, vUv.x));' +
+        ' gl_FragColor = vec4(uColor, a * uIntensity); }'
+    });
+    [[-21, -3], [-15, 9], [-25, 7]].forEach(function (s, i) {
+      var cone = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 5.0, 30, 12, 1, true), shaftMat);
+      var gy = 1.0 + groundHeight(s[0], s[1]);
+      cone.position.set(s[0], gy + 13, s[1]);
+      cone.rotation.z = 0.42; // lean top toward the evening-sun side (-x)
+      cone.rotation.y = i * 1.05;
+      cone.renderOrder = 5;
+      scene.add(cone);
+    });
+  }
+
+  // ---------- bloom glow casters ----------
+  function registerBloomCasters() {
+    if (!window.GlowBloom) return;
+    var GB = window.GlowBloom;
+    // NOTE: lamp + lantern bulbs already carry soft glow sprites in the main
+    // scene; giving them bloom-layer casters too stacked into white blobs.
+    // The bloom layer is reserved for large soft halos (sun/moon), fireflies,
+    // cottage windows, and water glints.
+    // moon + sun halo followers (positions copied per-frame in onTick)
+    function halo(inner, size) {
+      var m = new THREE.SpriteMaterial({
+        map: makeGlowTexture(inner, 'rgba(255,255,255,0)'),
+        transparent: true, opacity: 0, depthWrite: false, toneMapped: false, fog: false
+      });
+      var sp = new THREE.Sprite(m);
+      sp.scale.set(size, size, 1);
+      GB.addCaster(sp);
+      return sp;
+    }
+    bloomMoonGlow = halo('rgba(220,232,255,0.9)', 110);
+    bloomSunGlow = halo('rgba(255,236,190,1)', 170);
+    // fireflies: share the drift geometry, slightly larger/softer additive points
+    if (fireflies) {
+      var fm = new THREE.PointsMaterial({
+        color: 0xeaffb0, size: 0.5, transparent: true, opacity: 0,
+        depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false
+      });
+      bloomFireflies = new THREE.Points(fireflies.geometry, fm);
+      GB.addCaster(bloomFireflies);
+    }
+    // water glint streaks: sun (warm) + moon (cool), laid flat on the water
+    function glintStreak(color) {
+      var m = new THREE.MeshBasicMaterial({
+        map: makeGlowTexture('rgba(255,255,255,1)', 'rgba(255,255,255,0)'),
+        color: color, transparent: true, opacity: 0,
+        depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false
+      });
+      var mesh = new THREE.Mesh(new THREE.PlaneGeometry(36, 11), m);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.y = -0.55;
+      GB.addCaster(mesh);
+      return { mesh: mesh, mat: m };
+    }
+    bloomGlint = [glintStreak(0xffd9a0), glintStreak(0xbcd6ff)];
   }
 
   function buildPalm(x, z) {
@@ -1138,8 +1520,12 @@
       .addScaledVector(_f, 500).addScaledVector(_u, 150).addScaledVector(_r, -190);
     moonSprite.position.copy(camera.position)
       .addScaledVector(_f, 500).addScaledVector(_u, 170).addScaledVector(_r, 210);
+    // bloom halo followers track the billboards
+    if (bloomSunGlow) bloomSunGlow.position.copy(sunSprite.position);
+    if (bloomMoonGlow) bloomMoonGlow.position.copy(moonSprite.position);
 
     // water shimmer: gentle vertex waves + subtle opacity pulse
+    if (waterUniforms) waterUniforms.uTime.value = wobT;
     if (waterGeo) {
       var p = waterGeo.attributes.position, base = waterGeo.userData.base;
       for (var i = 0; i < p.count; i += 2) { // stride 2 keeps it cheap
@@ -1163,6 +1549,7 @@
       }
       fp.needsUpdate = true;
       fireflies.material.opacity = nightF * (0.55 + 0.35 * Math.sin(wobT * 2.3));
+      if (bloomFireflies) bloomFireflies.material.opacity = nightF * 0.3;
     }
 
     // cloud drift
@@ -1342,7 +1729,8 @@
     }
 
     // labels face camera automatically (sprites); scale labels by distance is handled by sprite sizeAttenuation
-    renderer.render(scene, camera);
+    if (window.GlowBloom) window.GlowBloom.render(scene, camera);
+    else renderer.render(scene, camera);
   }
 
   // ---------- resize ----------
@@ -1353,6 +1741,7 @@
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
+    if (window.GlowBloom) { try { window.GlowBloom.resize(); } catch (e) {} }
   }
 
   // ---------- init ----------
@@ -1369,6 +1758,9 @@
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     container.appendChild(renderer.domElement);
+
+    // selective glow-layer bloom (cheap: quarter-res, additive composite)
+    if (window.GlowBloom) { try { window.GlowBloom.init(renderer); } catch (e) { /* bloom off */ } }
 
     // floating speech bubbles live in an overlay above the canvas (below the HUD)
     speechLayer = document.createElement('div');
@@ -1415,10 +1807,14 @@
     scatterPalms();
     scatterLollipops();
     scatterGrassBlobs();
+    buildCottages();
+    scatterProps();
+    buildShafts();
     buildSparkles();
     buildClouds();
     buildRain();
     buildFireflies();
+    registerBloomCasters();
 
     applyTimeOfDay(10.5);
     setWeather('Clear');
@@ -1448,6 +1844,7 @@
     init: init,
     setTimeOfDay: function (h) { applyTimeOfDay(h); },
     setWeather: setWeather,
+    setBloom: function (b) { if (window.GlowBloom) window.GlowBloom.setEnabled(b); },
 
     toggleOverview: function () {
       overview = !overview;

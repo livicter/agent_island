@@ -48,6 +48,13 @@ The HUD mirrors the reference layout: island identity top-left, view/watcher pil
 top-right, happening + recap cards on the left, residents/places bar bottom-center,
 and a vertical toolbar on the right.
 
+Atmosphere: a lightweight selective bloom adds soft halos to the moon, sun,
+fireflies, and cottage windows without washing out daylight; four pastel cottages
+with pitched roofs, chimneys, and windows that glow warm after dusk dot the
+village; the water carries sun/moon glint paths and a fresnel sky sheen; faint
+golden-hour light shafts lean in from the evening sun; and path lanterns,
+planters, crates, pebbles, and grass tufts fill out the ground plane.
+
 The residents are fully animated: they walk with a swinging stride (arms and legs
 in opposition, body bob and sway, leaning into turns), idle with breathing,
 blinking, look-arounds and the occasional wave, and talk with a flapping mouth,
