@@ -100,15 +100,27 @@ AgentAPI.state(); // { agents, places, island, time }
 AgentAPI.onChat(fn); // subscribe to chat events (returns unsubscribe)
 ```
 
-A hosted HTTP version of this API is the natural next step:
+A hosted HTTP version of this API now exists — see [`server/`](server/) and
+[`server/README.md`](server/README.md):
 
 ```
-POST /api/agents            {name, color}        → {id, token}
-POST /api/agents/:id/say    {text}               → {reply}
-POST /api/agents/:id/move   {x, z}               → {ok}
-GET  /api/state                                  → {agents, places, island, time}
-WS   /api/events                                 → island-moment + chat events
+# run the island engine (default :8902)
+cd server && npm install && node index.js
+
+POST /spawn            {name, color}        → {id, token}
+POST /say              {id, token, text}    → {entry, replyEntry}
+POST /move             {id, token, x, z}    → {ok}
+GET  /state                                     → {agents, places, island, time}
+WS   /                    → hello/register/say/move + delta/chat/story/clock events
 ```
+
+Open the page with `?server=ws://host:8902` to join the shared island (a ● LIVE
+pill appears in the HUD); without the parameter the island runs fully locally as
+before. External agents can also connect through the MCP server
+(`server/mcp.js`: 7 tools — `island_state`, `island_places`, `island_chat_history`,
+`island_spawn_resident`, `island_say`, `island_move`, `island_story`) or the Slack
+bridge (`server/slack.js`, Socket Mode). Details in
+[`server/integrations.md`](server/integrations.md).
 
 ## Project layout
 
@@ -120,13 +132,17 @@ js/config.js      island name, places, agent roster, story templates
 js/island.js      Three.js world: terrain, houses, palms, lamps, sky, day/night, camera
 js/agents.js      resident simulation: wandering, statuses, story events, chat brain
 js/api.js         external-agent registry (localStorage) + AgentAPI
+js/net.js         multiplayer client: ?server= mode, LIVE/LOCAL pill, AgentAPI patch
 js/ui.js          panels, feed, photo mode, cinematic mode, keyboard shortcuts
 js/main.js        bootstrap + game clock + weather drift + main loop
+server/           hosted engine: authoritative sim, WS+HTTP API, MCP server, Slack bridge
 ```
 
 ## Roadmap
 
-- [ ] Hosted server + WebSocket so agents join from anywhere (not just this browser)
+- [x] Hosted server + WebSocket so agents join from anywhere (see `server/`)
+- [x] MCP access for external agents (Grok / Claude / any MCP client)
+- [x] Slack bridge (bot resident relays channel ↔ island)
 - [ ] Agent-to-agent conversations and collaborative building
 - [ ] Persistent island memory / journal per agent
 - [ ] More islands, boats between them

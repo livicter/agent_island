@@ -23,6 +23,18 @@
   const todOverride = Number.isFinite(todParam) ? todParam : null;
   const weatherParam = params.get("weather");
 
+  // Hosted multiplayer: ?server=ws://host:8902 or ?server=auto (ws://<host>:8902).
+  // When present the local agent sim is skipped and Net drives the island
+  // from the server; if the server is unreachable Net falls back to the
+  // exact local boot path below.
+  const serverParam = params.get("server");
+
+  function resolveServerUrl(p) {
+    if (!p || p === "auto") return "ws://" + location.hostname + ":8902";
+    if (/^wss?:\/\//i.test(p)) return p;
+    return "ws://" + p;
+  }
+
   window.addEventListener("DOMContentLoaded", () => {
     if (!window.THREE) {
       document.getElementById("scene").innerHTML =
@@ -31,9 +43,79 @@
     }
 
     Island.init(document.getElementById("scene"));
-    Agents.init();
+    if (serverParam) {
+      bootServer(serverParam);
+    } else {
+      bootLocalRest(false);
+    }
+  });
+
+  // Server mode: no local roster, no local clock/weather intervals, no
+  // Agents.tick. The server's 'welcome'/'clock'/'delta' messages drive the
+  // island; Net patches Agents/AgentAPI so the UI keeps working.
+  function bootServer(param) {
+    if (!window.Net) {
+      bootLocalRest(false); // net.js missing: plain local island
+      return;
+    }
     AgentAPI.init();
     UI.init();
+
+    UI.setWatchers(18);
+    UI.setHappening(ISLE.happenings[0]);
+    UI.setRecap(
+      "Wren followed a trail of glowing moths and returned with star sand."
+    );
+    UI.feedEvent(
+      "Welcome to Dawnbreak. The residents are waking up — click anyone to say hello.",
+      "ISLAND"
+    );
+
+    // Local defaults until the first server 'clock' message arrives; the
+    // server owns time/weather from then on.
+    if (weatherParam) {
+      state.weather = weatherParam;
+      Island.setWeather(weatherParam);
+    }
+    Island.setTimeOfDay(state.gameMinutes / 60);
+    UI.setClock({
+      time: fmtClock(),
+      day: state.day,
+      season: state.season,
+      weather: state.weather,
+    });
+
+    // animation loop (no local agent sim). If the server proves unreachable,
+    // the fallback stops this loop before starting the local one, so only
+    // one rAF loop ever runs.
+    let last = performance.now();
+    let serverLoopAlive = true;
+    let frameId = 0;
+    function loop(now) {
+      if (!serverLoopAlive) return;
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      Island.onTick(dt, now / 1000);
+      UI.tick(dt);
+      frameId = requestAnimationFrame(loop);
+    }
+    frameId = requestAnimationFrame(loop);
+
+    // Net falls back to the local island (UI already initialized) if the
+    // server can't be reached after 3 reconnect attempts.
+    Net.init(resolveServerUrl(param), () => {
+      serverLoopAlive = false;
+      if (frameId) cancelAnimationFrame(frameId);
+      bootLocalRest(true);
+    });
+  }
+
+  // Local mode (verbatim previous behavior). uiReady=true when UI.init was
+  // already called on the server path before falling back.
+  function bootLocalRest(uiReady) {
+    Agents.init();
+    AgentAPI.init();
+    if (!uiReady) UI.init();
 
     // restore external agents registered earlier
     AgentAPI.restore(Agents);
@@ -113,5 +195,8 @@
       requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);
-  });
+
+    // HUD marker: local island (server mode flips this to LIVE on 'welcome')
+    if (window.Net && window.Net.markLocal) window.Net.markLocal();
+  }
 })();
