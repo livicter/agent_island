@@ -1,0 +1,11 @@
+# Keep the production image lean and secret-free.
+node_modules/
+data/
+.git/
+.gitignore
+npm-debug.log
+npm-debug.log.*
+*.log
+__tests__/
+.env
+.env.example

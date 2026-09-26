@@ -12,6 +12,12 @@ const PORT = Number(process.env.PORT || 8902);
 
 const engine = new Engine();
 
+// Persistence targets: DATA_DIR env overrides the snapshot directory, and
+// the snapshot file is per-port (world-<port>.json) so two engines on one
+// host don't collide. Must run before loadFromDisk() so restore reads the
+// right file.
+engine.setPersistOpts({ dir: process.env.DATA_DIR, port: PORT });
+
 // Persistence: restore the last snapshot if one exists; otherwise boot fresh.
 if (engine.loadFromDisk()) {
   const c = engine.clockState();

@@ -1,0 +1,52 @@
+# Fly.io deployment for the Agent Island engine.
+#
+# One-time setup (install flyctl, then from the repo's server/ directory):
+#   fly launch --name agent-island-engine --region hkg --no-deploy
+#       (accepts this fly.toml; the engine is WS-capable on one always-on machine)
+#   fly volumes create island_data --region hkg --size 1
+#       (REQUIRED — world snapshots live here; without a volume the world
+#        resets on every deploy/restart)
+#   fly secrets set ISLAND_SECRET="$(openssl rand -hex 32)"
+#       (+ SLACK_* secrets if you also run the bridge as a second process)
+#   fly deploy
+#
+# After that: `fly logs`, `fly ssh console` for maintenance.
+# The static frontend stays wherever it is (GitHub Pages etc.) and connects
+# with ?server=wss://agent-island-engine.fly.dev
+#
+# NOTE: the data path MUST match the Dockerfile's WORKDIR data dir
+# (/app/server/data) — the engine writes world-<port>.json there by default.
+
+app = "agent-island-engine"
+
+# User is in Hong Kong; deploy close by. flyctl launch will confirm/adjust.
+primary_region = "hkg"
+
+[env]
+  PORT = "8902"
+
+[http_service]
+  internal_port = 8902
+  force_https = true
+  # The island must NEVER sleep: it is the authoritative simulation ticking
+  # every 50 ms and holding live WS clients. Keep machines awake and one
+  # always running.
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "get"
+    path = "/health"
+    protocol = "http"
+    timeout = "5s"
+
+[[vm]]
+  memory = "512mb"
+
+# Persistent volume for world snapshots (world-<port>.json).
+[[mounts]]
+  source = "island_data"
+  destination = "/app/server/data"

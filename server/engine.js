@@ -142,16 +142,22 @@ const CONVO_ASIDES = [
 ];
 
 // ---------------------------------------------------------------------------
-// Persistence (plain-JSON snapshots under server/data/)
+// Persistence (plain-JSON snapshots).
+//
+// The snapshot directory defaults to <server>/data and can be overridden
+// with the DATA_DIR env var. The snapshot filename is per-port,
+// world-<port>.json (e.g. world-8902.json), so two engines running on the
+// same host (even sharing one DATA_DIR) never clobber each other's files.
+// Call engine.setPersistOpts({ dir, port }) before loadFromDisk() to use
+// the runtime port; the constructor defaults keep single-engine behavior
+// (dir <server>/data, file world-8902.json).
+//
+// NOTE: older builds wrote a single server/data/world.json. That filename
+// is intentionally NOT migrated — an old snapshot is simply ignored on
+// boot (treated as no snapshot) and overwritten on next save.
 // ---------------------------------------------------------------------------
-const PERSIST_DIR = path.join(__dirname, 'data');
-const SNAPSHOT_PATH = path.join(PERSIST_DIR, 'world.json');
+const DEFAULT_PERSIST_DIR = path.join(__dirname, 'data');
 const SNAPSHOT_VERSION = 1;
-
-function ensurePersistDir() {
-  try { fs.mkdirSync(PERSIST_DIR, { recursive: true }); }
-  catch (e) { /* best effort — save will throw if it really fails */ }
-}
 
 // ---------------------------------------------------------------------------
 // Engine
@@ -181,6 +187,33 @@ class Engine {
     this.convoTimer = this._nextConvoDelay(); // real seconds until next convo
 
     this.listeners = {}; // event -> [fn]
+
+    // persistence targets; refined by setPersistOpts() before load/save
+    this.setPersistOpts({});
+  }
+
+  // -- persistence options ------------------------------------------------------
+  // dir: snapshot directory (env DATA_DIR wins when not passed explicitly).
+  // port: used for the per-port snapshot filename world-<port>.json.
+  setPersistOpts(opts = {}) {
+    const port = Number(opts.port ?? process.env.PORT ?? 8902) || 8902;
+    const dir = opts.dir ?? process.env.DATA_DIR ?? DEFAULT_PERSIST_DIR;
+    this.persistDir = String(dir);
+    this.snapshotPath = path.join(this.persistDir, `world-${port}.json`);
+  }
+
+  // path the engine reads/writes, relative to the repo root when inside it
+  // (e.g. "server/data/world-8902.json"), absolute otherwise (DATA_DIR
+  // pointing outside the repo) — the value net.js reports from
+  // GET /admin/snapshot
+  snapshotRelPath() {
+    const rel = path.relative(path.join(__dirname, '..'), this.snapshotPath);
+    return rel.startsWith('..') ? this.snapshotPath : rel;
+  }
+
+  ensurePersistDir() {
+    try { fs.mkdirSync(this.persistDir, { recursive: true }); }
+    catch (e) { /* best effort — save will throw if it really fails */ }
   }
 
   // -- tiny event emitter ----------------------------------------------------
@@ -677,13 +710,14 @@ class Engine {
   }
 
   // -- persistence ---------------------------------------------------------------
-  // saveToDisk(): serialize the full world to server/data/world.json
-  // (atomic: write world.json.tmp then rename). Includes every agent's full
+  // saveToDisk(): serialize the full world to the per-port snapshot file
+  // (e.g. server/data/world-8902.json; see Persistence header)
+  // (atomic: write world-<port>.json.tmp then rename). Includes every agent's full
   // record, the tokens map (so external residents keep auth across
   // restarts), chat, storyFeed, seq, clock fields, and the sim timers.
   // Returns true on success; throws on I/O failure.
   saveToDisk() {
-    ensurePersistDir();
+    this.ensurePersistDir();
     const data = {
       version: SNAPSHOT_VERSION,
       savedAt: new Date().toISOString(),
@@ -718,10 +752,10 @@ class Engine {
       happeningTimer: this.happeningTimer,
       storyTimer: this.storyTimer,
     };
-    const tmp = SNAPSHOT_PATH + '.tmp';
+    const tmp = this.snapshotPath + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(data));
-    fs.renameSync(tmp, SNAPSHOT_PATH);
-    console.log(`[persist] saved ${data.agents.length} agents, ${data.chat.length} chat entries -> ${SNAPSHOT_PATH}`);
+    fs.renameSync(tmp, this.snapshotPath);
+    console.log(`[persist] saved ${data.agents.length} agents, ${data.chat.length} chat entries -> ${this.snapshotPath}`);
     return true;
   }
 
@@ -729,10 +763,10 @@ class Engine {
   // on success. Returns false (fresh boot) when the snapshot is missing,
   // unparseable, or has a wrong version — a corrupt snapshot never crashes.
   loadFromDisk() {
-    ensurePersistDir();
+    this.ensurePersistDir();
     let raw;
     try {
-      raw = fs.readFileSync(SNAPSHOT_PATH, 'utf8');
+      raw = fs.readFileSync(this.snapshotPath, 'utf8');
     } catch (e) {
       return false; // no snapshot yet — fresh boot
     }
@@ -740,11 +774,11 @@ class Engine {
     try {
       data = JSON.parse(raw);
     } catch (e) {
-      console.log(`[persist] corrupt snapshot at ${SNAPSHOT_PATH}: not valid JSON — fresh boot`);
+      console.log(`[persist] corrupt snapshot at ${this.snapshotPath}: not valid JSON — fresh boot`);
       return false;
     }
     if (!data || data.version !== SNAPSHOT_VERSION || !Array.isArray(data.agents)) {
-      console.log(`[persist] unreadable snapshot at ${SNAPSHOT_PATH}: version ${data && data.version} (want ${SNAPSHOT_VERSION}) — fresh boot`);
+      console.log(`[persist] unreadable snapshot at ${this.snapshotPath}: version ${data && data.version} (want ${SNAPSHOT_VERSION}) — fresh boot`);
       return false;
     }
     this.agents = {};

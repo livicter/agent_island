@@ -19,6 +19,32 @@ function start(engine, opts = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const server = http.createServer(handleRequest);
 
+  // Say rate limit: 1 accepted message per agent per SAY_COOLDOWN_MS (2 s),
+  // enforced in the transport layer (here, not the engine) so a spammy
+  // client burns one cheap check instead of touching the sim. Tracked by
+  // agent id: counts the request once — a `say` to a roster agent (brain
+  // reply) emits two chat entries but is still one request. Roster agents
+  // have no tokens and can't say at all, so this only affects external
+  // residents. In-memory Map; stale entries are pruned on insert so it
+  // can't grow unboundedly.
+  const SAY_COOLDOWN_MS = 2000;
+  const lastSayAt = new Map(); // id -> timestamp of last accepted say
+  function checkSayRate(id) {
+    const now = Date.now();
+    // prune occasionally: drop entries older than 2x the cooldown window
+    if (lastSayAt.size >= 1000 || Math.random() < 0.01) {
+      for (const [k, t] of lastSayAt) {
+        if (now - t > SAY_COOLDOWN_MS * 2) lastSayAt.delete(k);
+      }
+    }
+    const last = lastSayAt.get(id);
+    if (last !== undefined && now - last < SAY_COOLDOWN_MS) {
+      return { limited: true, retryAfterMs: SAY_COOLDOWN_MS - (now - last) };
+    }
+    lastSayAt.set(id, now);
+    return { limited: false, retryAfterMs: 0 };
+  }
+
   server.on('upgrade', (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
@@ -105,6 +131,11 @@ function start(engine, opts = {}) {
 
       case 'say': {
         authed(msg);
+        const rate = checkSayRate(msg.id);
+        if (rate.limited) {
+          ws.send(JSON.stringify({ type: 'error', error: 'rate limited' }));
+          break;
+        }
         engine.say(msg.id, msg.text, { to: msg.to }); // emits 'chat' -> broadcast
         break;
       }
@@ -183,6 +214,8 @@ function start(engine, opts = {}) {
         const body = await readBody(req);
         if (!engine.getAgent(body.id)) return json(res, 404, { error: 'unknown agent' });
         if (!engine.checkToken(body.id, body.token)) return json(res, 403, { error: 'bad token' });
+        const rate = checkSayRate(body.id);
+        if (rate.limited) return json(res, 429, { error: 'rate limited', retryAfterMs: rate.retryAfterMs });
         const { entry, replyEntry } = engine.say(body.id, body.text, { to: body.to });
         return json(res, 200, { ok: true, entry, reply: replyEntry });
       }
@@ -219,7 +252,7 @@ function start(engine, opts = {}) {
           return json(res, 403, { error: 'invalid secret' });
         }
         engine.saveToDisk();
-        return json(res, 200, { ok: true, agents: engine.order.length, path: 'server/data/world.json' });
+        return json(res, 200, { ok: true, agents: engine.order.length, path: engine.snapshotRelPath() });
       }
 
       return json(res, 404, { error: 'not found' });

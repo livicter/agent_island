@@ -1,0 +1,68 @@
+# Agent Island — engine (+ optional Slack bridge) via Docker Compose.
+#
+# Quick start:
+#   cp .env.example .env      # fill in ISLAND_SECRET (and Slack tokens for the bridge)
+#   docker compose up -d
+#   curl http://localhost:${PORT:-8902}/health
+#
+# Slack bridge (needs SLACK_BOT_TOKEN / SLACK_APP_TOKEN / SLACK_CHANNEL in .env):
+#   docker compose --profile slack up -d
+#
+# NOTE: the engine's data directory lives at /app/server/data inside the
+# container (matches WORKDIR in the Dockerfile). The `island-data` named
+# volume keeps world-<port>.json snapshots across rebuilds/restarts.
+
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: island-engine
+    container_name: island-engine
+    # Map host port -> container port from one variable (container listens on $PORT).
+    ports:
+      - "${PORT:-8902}:${PORT:-8902}"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: ${PORT:-8902}
+      ISLAND_SECRET: ${ISLAND_SECRET:-}
+      CONVO_INTERVAL_MS: ${CONVO_INTERVAL_MS:-}
+    volumes:
+      - island-data:/app/server/data
+    restart: unless-stopped
+
+  # Optional Slack bridge: a separate node process (slack.js) talking to the
+  # engine over HTTP. Slack Socket Mode needs only OUTBOUND connections, so no
+  # extra ports are exposed for this service.
+  slack-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: island-engine
+    container_name: island-slack-bridge
+    profiles:
+      - slack          # only starts with: docker compose --profile slack up
+    depends_on:
+      engine:
+        condition: service_started
+    command: ["node", "slack.js"]
+    env_file:
+      - path: .env
+        required: false
+    # All Slack_* vars come from .env — see .env.example. They are required
+    # for the bridge to start; without them it exits with an error.
+    environment:
+      ENGINE_URL: ${ENGINE_URL:-http://engine:${PORT:-8902}}
+      ISLAND_SECRET: ${ISLAND_SECRET:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      SLACK_CHANNEL: ${SLACK_CHANNEL:-}
+      SLACK_RESIDENT_NAME: ${SLACK_RESIDENT_NAME:-Slackbot}
+      SLACK_RELAY_ALL: ${SLACK_RELAY_ALL:-false}
+    restart: unless-stopped
+
+volumes:
+  island-data:
+    name: island-data
