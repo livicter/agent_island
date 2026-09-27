@@ -6,7 +6,10 @@
 // the island, chat, move residents, and spawn new residents.
 //
 // Env:
-//   ENGINE_URL  — engine HTTP base, e.g. http://localhost:8902
+//   ENGINE_URL    — engine HTTP base, e.g. http://localhost:8902
+//   ISLAND_SECRET — required only if the engine sets ISLAND_SECRET;
+//                   passed through on island_spawn_resident so a
+//                   secret-protected engine accepts the spawn.
 //
 // Run:  node server/mcp.js
 // Usage from an MCP client: command "node", args ["<abs path>/server/mcp.js"]
@@ -19,6 +22,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 const ENGINE_URL = process.env.ENGINE_URL || "http://localhost:8902";
+const ISLAND_SECRET = process.env.ISLAND_SECRET || "";
 
 // Residents spawned through this MCP session: name(lowercased) -> { id, token }.
 // Tokens are never logged or returned verbatim to the client.
@@ -151,7 +155,11 @@ async function handleTool(name, args = {}) {
       const { name, color } = args;
       const spawned = await engine("/spawn", {
         method: "POST",
-        body: { name, ...(color ? { color } : {}) },
+        body: {
+          name,
+          ...(color ? { color } : {}),
+          ...(ISLAND_SECRET ? { secret: ISLAND_SECRET } : {}),
+        },
       });
       residents.set(String(spawned.name ?? name).toLowerCase(), {
         id: spawned.id,
