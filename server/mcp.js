@@ -133,6 +133,19 @@ const TOOLS = [
     description: "Recent story feed entries: narrative highlights of what's happened on the island.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
+  {
+    name: "island_leave",
+    description:
+      "Remove one of your residents from the island (must have been spawned in this MCP session). Frees the name.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        resident: { type: "string", description: "Resident name (must be spawned in this session)." },
+      },
+      required: ["resident"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 async function handleTool(name, args = {}) {
@@ -190,6 +203,15 @@ async function handleTool(name, args = {}) {
     case "island_story": {
       const state = await engine("/state");
       return state.story ?? [];
+    }
+    case "island_leave": {
+      const r = residentOrThrow(args.resident);
+      await engine("/leave", {
+        method: "POST",
+        body: { id: r.id, token: r.token },
+      });
+      residents.delete(String(args.resident).toLowerCase());
+      return { ok: true, resident: args.resident };
     }
     default:
       throw new Error(`Unknown tool: ${name}`);
