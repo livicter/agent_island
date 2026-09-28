@@ -88,7 +88,7 @@ const TOOLS = [
   {
     name: "island_spawn_resident",
     description:
-      "Spawn a new chibi resident on the island. The auth token is held server-side for this session; subsequent island_say / island_move calls only need the resident name.",
+      "Spawn a new resident on the island. The auth token is held server-side for this session; subsequent island_say / island_move calls only need the resident name.",
     inputSchema: {
       type: "object",
       properties: {

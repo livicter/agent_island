@@ -1,7 +1,7 @@
-/* characters.js — Chibi character builder for Agent Island
+/* characters.js — Dawnbreak resident builder
  *
  * Exposes window.Chibi with:
- *   Chibi.DEFS               named definitions for the 14 Moonwake residents
+ *   Chibi.DEFS               named definitions for the island residents
  *   Chibi.defFor(name, colorHex)  look up (or deterministically generate) a def
  *   Chibi.build(def)          -> THREE.Group with an articulated rig:
  *     group.userData = { body, head, headGroup, armL, armR, legL, legR,
@@ -153,7 +153,7 @@
   /* group at its old positions. All dimensions are chunked up x1.25.    */
   /* ------------------------------------------------------------------ */
 
-  var HEAD_R = 0.58;   // head radius the old accessory layout was designed for
+  var HEAD_R = 0.48;   // reed-folk head; accessories scale from this
   var NECK_Y = 1.32;   // headGroup pivot height in group space
   var K = 1.25;        // chunk factor for accessories
 
@@ -339,7 +339,7 @@
   };
 
   /* ------------------------------------------------------------------ */
-  /* build — articulated chibi rig                                      */
+  /* build — articulated resident rig                                  */
   /*                                                                    */
   /*   group                                                            */
   /*    +- legL / legR  (pivot at hip)                                  */
@@ -376,9 +376,9 @@
     var legL = makeLeg(-1);
     var legR = makeLeg(1);
 
-    // Body: stubby capsule.
-    var body = cap(0.36, 0.35, bodyMat);
-    body.position.y = 0.78;
+    // Body: taller reed capsule, narrower than the head used to be.
+    var body = cap(0.30, 0.52, bodyMat);
+    body.position.y = 0.86;
     group.add(body);
 
     // Belly: two-tone sphere patch on the front of the body.
@@ -405,17 +405,19 @@
     headGroup.position.set(0, NECK_Y, 0);
     group.add(headGroup);
 
-    // Head: big round sphere.
-    var head = sph(0.62, 16, 14, headMat);
-    head.position.set(0, 0.28, 0);
+    // Head: smaller than the old oversized sphere so the body reads first.
+    var head = sph(HEAD_R, 16, 14, headMat);
+    head.position.set(0, 0.22, 0);
     headGroup.add(head);
 
-    // Eyes: two dark dots on the face.
-    var eyeL = sph(0.06, 8, 6, darkMat);
-    eyeL.position.set(-0.17, 0.35, 0.52);
+    // Eyes: narrow marks, not large dots.
+    var eyeL = sph(0.045, 8, 6, darkMat);
+    eyeL.scale.set(1.5, 0.7, 0.6);
+    eyeL.position.set(-0.14, 0.28, 0.40);
     headGroup.add(eyeL);
-    var eyeR = sph(0.06, 8, 6, darkMat);
-    eyeR.position.set(0.17, 0.35, 0.52);
+    var eyeR = sph(0.045, 8, 6, darkMat);
+    eyeR.scale.set(1.5, 0.7, 0.6);
+    eyeR.position.set(0.14, 0.28, 0.40);
     headGroup.add(eyeR);
 
     // Blush: pink flattened spheres on the cheeks.
@@ -427,9 +429,9 @@
     });
 
     // Mouth: small flattened dark-red sphere.
-    var mouth = sph(0.09, 8, 6, lambert(0x7a3b2e));
-    mouth.scale.set(1.4, 0.5, 0.5);
-    mouth.position.set(0, 0.12, 0.55);
+    var mouth = sph(0.07, 8, 6, lambert(0x7a3b2e));
+    mouth.scale.set(1.4, 0.45, 0.45);
+    mouth.position.set(0, 0.08, 0.42);
     headGroup.add(mouth);
 
     // Accessory: into headGroup (head-local coords), except the scarf,
@@ -437,6 +439,16 @@
     var accType = (def.accessory && def.accessory.type) || 'none';
     var builder = ACCESSORY_BUILDERS[accType] || ACCESSORY_BUILDERS.none;
     builder(accType === 'scarf' ? group : headGroup, def);
+
+    // Tide collar: every resident wears the same dark band. That is the
+    // island silhouette, not a copied accessory set.
+    var collar = new THREE.Mesh(
+      new THREE.TorusGeometry(0.26, 0.04, 6, 14),
+      lambert(0x1c3d3a)
+    );
+    collar.rotation.x = Math.PI / 2;
+    collar.position.y = NECK_Y - 0.06;
+    group.add(collar);
 
     // Status ring: thin flat ring at the feet (integrator tints it).
     var ringMat = new THREE.MeshBasicMaterial({
@@ -466,6 +478,7 @@
     group.userData.eyeR = eyeR;
     group.userData.mouth = mouth;
     group.userData.ringMat = ringMat;
+    group.userData.eyeRestY = 0.7;
 
     return group;
   }

@@ -1,13 +1,13 @@
-/* Agent Island — Moonwake-style light HUD */
+/* Agent Island — Dawnbreak tide-ink HUD */
 :root{
-  --paper: rgba(255,253,247,.94);
-  --paper-solid: #fffdf7;
-  --panel-border: rgba(42,48,64,.08);
-  --text: #2a3040;
-  --muted: #7a8194;
-  --faint: #a8adbc;
-  --accent: #3b82f6;
-  --gold: #c9a227;
+  --paper: rgba(244,239,228,.94);
+  --paper-solid: #f4efe4;
+  --panel-border: rgba(28,61,58,.12);
+  --text: #1c2b28;
+  --muted: #5e6f6a;
+  --faint: #8a9893;
+  --accent: #b85c38;
+  --gold: #c47a3a;
   --radius: 16px;
   --shadow: 0 10px 30px rgba(42,48,64,.12), 0 2px 6px rgba(42,48,64,.07);
   --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -15,7 +15,7 @@
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
-body{font-family:var(--font);background:#e9eff5;color:var(--text);-webkit-font-smoothing:antialiased}
+body{font-family:var(--font);background:#d7e2dc;color:var(--text);-webkit-font-smoothing:antialiased}
 #scene{position:fixed;inset:0}
 #scene canvas{display:block}
 
@@ -42,7 +42,7 @@ body{font-family:var(--font);background:#e9eff5;color:var(--text);-webkit-font-s
   border-radius:999px;padding:4px;box-shadow:var(--shadow);backdrop-filter:blur(12px)}
 #viewtoggle button{border:0;background:transparent;color:var(--muted);font-size:13px;font-weight:600;
   padding:8px 18px;border-radius:999px;cursor:pointer}
-#viewtoggle button.active{background:#2a3040;color:#fffdf7}
+#viewtoggle button.active{background:#1c3d3a;color:#f4efe4}
 #watchers-pill{display:inline-flex;align-items:center;gap:7px;background:var(--paper);
   border:1px solid var(--panel-border);border-radius:999px;padding:8px 16px;
   font-size:12.5px;font-weight:600;color:var(--text);box-shadow:var(--shadow);backdrop-filter:blur(12px)}

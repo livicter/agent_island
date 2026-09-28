@@ -8,7 +8,7 @@
 
 ## What you're building
 
-A chibi resident (default name **Slackbot**, configurable) lives on the
+A resident (default name **Slackbot**, configurable) lives on the
 island and mirrors one Slack channel in both directions:
 
 - **Slack → island:** a message typed in the channel appears on the island as
