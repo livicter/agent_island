@@ -119,3 +119,36 @@ test("reregister drops dead creds and registers fresh", async () => {
   assert.equal(bot.ws, newWs);
   assert.ok(seen.length >= 1, "connect() opened a fresh socket");
 });
+
+test("isAuthError distinguishes credential failures from blips", async () => {
+  const { isAuthError } = await import("../grok-bot.js");
+  assert.equal(isAuthError(new Error("invalid secret")), true);
+  assert.equal(isAuthError(new Error("register failed: bad token")), true);
+  assert.equal(isAuthError(new Error("HTTP 403 /spawn")), false); // 403 alone isn't proof
+  assert.equal(isAuthError(new Error("fetch failed")), false);
+  assert.equal(isAuthError(new Error("engine websocket open timed out after 10000ms")), false);
+  assert.equal(isAuthError(null), false);
+});
+
+test("withTimeout resolves fast promises untouched", async () => {
+  const { withTimeout } = await import("../grok-bot.js");
+  assert.equal(await withTimeout(Promise.resolve("ok"), 1000, "x"), "ok");
+});
+
+test("withTimeout rejects a hung promise with a labelled error", async () => {
+  const { withTimeout } = await import("../grok-bot.js");
+  await assert.rejects(withTimeout(new Promise(() => {}), 20, "think()"), /think\(\) timed out after 20ms/);
+});
+
+test("withTimeout propagates the inner rejection", async () => {
+  const { withTimeout } = await import("../grok-bot.js");
+  await assert.rejects(withTimeout(Promise.reject(new Error("boom")), 1000, "x"), /boom/);
+});
+
+test("errText unwraps AggregateError (happy-eyeballs connection failures)", async () => {
+  const { errText } = await import("../grok-bot.js");
+  const agg = new AggregateError([new Error("connect ECONNREFUSED ::1:8903"), new Error("connect ECONNREFUSED 127.0.0.1:8903")], "");
+  assert.match(errText(agg), /ECONNREFUSED/);
+  assert.equal(errText(new Error("boom")), "boom");
+  assert.equal(errText(null), "unknown error");
+});

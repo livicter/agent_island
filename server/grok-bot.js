@@ -26,8 +26,11 @@
 //   BOT_STATE_FILE  credential file (default <server/data>/grok-bot.json)
 //   BOT_STAY        "true" keeps the resident on Ctrl-C (default: leave)
 //   BOT_QUIET       "true" disables wandering
+//   BOT_SAY_GAP_MS        min ms between messages (default 2500; engine allows 1 per 2s)
+//   BOT_THINK_TIMEOUT_MS  cap on think() per message (default 30000)
+//   BOT_HTTP_TIMEOUT_MS   cap on engine round-trips (default 10000)
 //
-// Run:  ISLAND_SECRET=... node server/grok-bot.js
+// Run:  ISLAND_SECRET=... node server/grok-bot.js [--help]
 //
 // To give the bot a real brain, replace the `think()` function below with a
 // call to your model. Everything else — lifecycle, reconnects, rate limits,
@@ -48,7 +51,10 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STATE_FILE =
   process.env.BOT_STATE_FILE || path.join(process.env.DATA_DIR || path.join(HERE, "data"), "grok-bot.json");
 
-const SAY_GAP_MS = 4000; // engine cooldown is 2s; stay well under it
+const SAY_GAP_MS = Math.max(2100, parseInt(process.env.BOT_SAY_GAP_MS || "2500", 10)); // engine allows 1 msg / 2s; stay above it
+const THINK_TIMEOUT_MS = parseInt(process.env.BOT_THINK_TIMEOUT_MS || "30000", 10); // cap a hung model call
+const HTTP_TIMEOUT_MS = parseInt(process.env.BOT_HTTP_TIMEOUT_MS || "10000", 10); // cap engine round-trips
+const STARTUP_ATTEMPTS = 8; // startup retries on transient failures (auth errors fail fast)
 const WANDER_MIN_MS = 25000;
 const WANDER_MAX_MS = 55000;
 const ISLAND_RADIUS = 34;
@@ -90,6 +96,58 @@ export function pickWanderTarget(pos) {
   const x = Math.max(-ISLAND_RADIUS, Math.min(ISLAND_RADIUS, pos.x + Math.cos(a) * d));
   const z = Math.max(-ISLAND_RADIUS, Math.min(ISLAND_RADIUS, pos.z + Math.sin(a) * d));
   return { x: Math.round(x * 10) / 10, z: Math.round(z * 10) / 10 };
+}
+
+/** Human-readable error text, unwrapping AggregateError (e.g. happy-eyeballs ECONNREFUSED). */
+export function errText(e) {
+  if (!e) return "unknown error";
+  if (e instanceof AggregateError && Array.isArray(e.errors) && e.errors.length) {
+    return e.errors.map(errText).join("; ");
+  }
+  const m = String(e.message ?? "").trim();
+  if (m) return m;
+  if (e.cause) return errText(e.cause);
+  return String(e);
+}
+
+/** True for errors that retrying won't fix (bad credentials, not blips). */
+export function isAuthError(err) {
+  const m = String(err?.message ?? err ?? "").toLowerCase();
+  return /invalid secret|bad token|unauthorized|forbidden|invalid_auth|token_revoked|account_inactive/.test(m);
+}
+
+/** Race a promise against a timeout; rejects with a labelled Error. */
+export function withTimeout(promise, ms, label = "operation") {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    t.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
+/** Print usage and exit (also used by --help). */
+export function printHelp() {
+  console.log(`grok-bot.js — persistent Agent Island resident bot.
+
+Usage:  ISLAND_SECRET=... node server/grok-bot.js [--help]
+
+Environment:
+  ENGINE_URL            engine HTTP base (default http://localhost:8902)
+  ISLAND_SECRET         required when the engine sets one (never hardcode it)
+  BOT_NAME              resident name (default "Grok")
+  BOT_COLOR             hex color (default "#7dd3fc")
+  BOT_STATE_FILE        credential file (default <server/data>/grok-bot.json)
+  BOT_STAY              "true" keeps the resident on exit (default: leave)
+  BOT_QUIET             "true" disables wandering
+  BOT_SAY_GAP_MS        min ms between messages (default 2500; engine: 1/2s)
+  BOT_THINK_TIMEOUT_MS  cap on think() per message (default 30000)
+  BOT_HTTP_TIMEOUT_MS   cap on engine round-trips (default 10000)
+
+Behavior: registers once, resumes the same resident on restart, replies when
+spoken to or mentioned, wanders every 25-55s, reconnects with backoff, and
+re-registers if its resident is removed server-side. Ctrl-C leaves the island
+unless BOT_STAY=true.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +204,7 @@ async function http(pathname, { method = "GET", body } = {}) {
     method,
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${pathname}`);
   const text = await res.text();
@@ -221,10 +280,19 @@ class Bot {
     }
     // Fresh registration over a throwaway socket (also proves the secret).
     const ws = this._wsFactory(wsUrl(ENGINE_URL));
-    await new Promise((res, rej) => {
-      ws.on("open", res);
-      ws.on("error", rej);
-    });
+    try {
+      await withTimeout(
+        new Promise((res, rej) => {
+          ws.on("open", res);
+          ws.on("error", rej);
+        }),
+        HTTP_TIMEOUT_MS,
+        "engine websocket open"
+      );
+    } catch (e) {
+      try { ws.close(); } catch { /* noop */ }
+      throw e;
+    }
     const welcomeP = waitFor(ws, "welcome");
     ws.send(JSON.stringify({ type: "hello" }));
     const welcome = await welcomeP;
@@ -243,7 +311,11 @@ class Bot {
   }
 
   send(obj) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(obj));
+      return true;
+    }
+    return false;
   }
 
   async say(text, to) {
@@ -253,7 +325,7 @@ class Bot {
     if (this.closing) return;
     const msg = { type: "say", id: this.creds.id, token: this.creds.token, text };
     if (to) msg.to = to;
-    this.send(msg);
+    if (!this.send(msg)) this.log("warn: not connected; dropping message");
     this.lastSay = Date.now();
   }
 
@@ -277,10 +349,11 @@ class Bot {
   }
 
   async onChat(entry) {
-    if (!shouldRespond(entry, this.creds.name)) return;
+    if (!this.creds || !shouldRespond(entry, this.creds.name)) return;
     this.log(`@${entry.fromName}: ${entry.text}`);
     try {
-      const reply = await think(entry);
+      // Cap think() so a hung model call can't wedge the reply path.
+      const reply = await withTimeout(think(entry), THINK_TIMEOUT_MS, "think()");
       if (reply && reply.trim()) await this.say(reply.trim());
     } catch (e) {
       this.log("think() failed:", e.message);
@@ -414,14 +487,44 @@ class Bot {
   }
 
   async run() {
-    await this.ensureResident();
+    const t0 = Date.now();
+    // Startup retries: transient failures (engine down, blips) retry with
+    // backoff; auth failures (bad secret/token) exit immediately — retrying
+    // those is never productive.
+    let attempt = 0;
+    for (;;) {
+      try {
+        await this.ensureResident();
+        break;
+      } catch (e) {
+        attempt++;
+        if (isAuthError(e)) {
+          this.log("fatal: authentication failed:", errText(e));
+          this.log("check ISLAND_SECRET and BOT_STATE_FILE, then restart.");
+          process.exit(1);
+        }
+        if (attempt >= STARTUP_ATTEMPTS) {
+          this.log(`fatal: could not reach the engine after ${attempt} attempts: ${errText(e)}`);
+          process.exit(1);
+        }
+        const wait = Math.min(30000, 2000 * 2 ** (attempt - 1));
+        this.log(`startup failed (attempt ${attempt}/${STARTUP_ATTEMPTS}): ${errText(e)}; retrying in ${wait}ms`);
+        await new Promise((r) => setTimeout(r, wait));
+      }
+    }
+    this.log(`engine reachable (${Date.now() - t0}ms); bot="${BOT_NAME}" stay=${BOT_STAY} wander=${!BOT_QUIET}`);
     this.connect();
     process.on("SIGINT", () => void this.shutdown(0));
     process.on("SIGTERM", () => void this.shutdown(0));
+    process.on("unhandledRejection", (e) => this.log("unhandled rejection:", errText(e)));
   }
 }
 
 const isMain = process.argv[1] === fileURLToPath(import.meta.url);
+if (isMain && process.argv.includes("--help")) {
+  printHelp();
+  process.exit(0);
+}
 if (isMain) {
   new Bot().run().catch((e) => {
     console.error("[grok-bot] fatal:", e.message);

@@ -234,3 +234,11 @@ test("resolveResident spawns when no state is saved", async () => {
   assert.equal(r.resumed, false);
   assert.equal(r.id, "ext-fresh");
 });
+
+test("isAuthError distinguishes credential failures from blips", async () => {
+  const { isAuthError } = await import("../slack.js");
+  assert.equal(isAuthError(new Error("invalid secret")), true);
+  assert.equal(isAuthError(new Error("slack auth failed: invalid_auth")), true);
+  assert.equal(isAuthError(new Error("engine unreachable")), false);
+  assert.equal(isAuthError(new Error("HTTP 429 /spawn")), false);
+});

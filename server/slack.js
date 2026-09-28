@@ -172,10 +172,50 @@ const RELAY_ALL = String(process.env.SLACK_RELAY_ALL || "false").toLowerCase() =
 const ENGINE_URL = process.env.ENGINE_URL || "http://localhost:8902";
 const ISLAND_SECRET = process.env.ISLAND_SECRET || "";
 const STAY = String(process.env.SLACK_STAY || "").toLowerCase() === "true";
-const POLL_MS = 4000;
+// Island -> Slack poll interval. 2s default: each poll is one tiny local
+// GET, so this is the dominant latency knob for island->Slack messages.
+const POLL_MS = Math.max(500, parseInt(process.env.SLACK_POLL_MS || "2000", 10));
+const HTTP_TIMEOUT_MS = parseInt(process.env.SLACK_HTTP_TIMEOUT_MS || "10000", 10);
+// Slack Web API calls (auth.test, chat.postMessage) have no timeout by
+// default — a stalled connection would hang the bridge silently.
+const SLACK_API_TIMEOUT_MS = parseInt(process.env.SLACK_API_TIMEOUT_MS || "15000", 10);
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** True for errors that retrying won't fix (bad credentials, not blips). */
+export function isAuthError(err) {
+  const m = String(err?.message ?? err ?? "").toLowerCase();
+  return /invalid secret|bad token|unauthorized|forbidden|invalid_auth|token_revoked|account_inactive/.test(m);
+}
+
+/** Print usage and exit (also used by --help). */
+export function printHelp() {
+  console.log(`slack.js — Agent Island <-> Slack bridge (Socket Mode + island polling).
+
+Usage:  SLACK_BOT_TOKEN=xoxb-... SLACK_APP_TOKEN=xapp-... SLACK_CHANNEL=C... \\
+          ISLAND_SECRET=... node server/slack.js [--help]
+
+Environment:
+  SLACK_BOT_TOKEN        bot token (xoxb-...) — required
+  SLACK_APP_TOKEN        app-level token (xapp-...) for Socket Mode — required
+  SLACK_CHANNEL          channel ID to relay — required
+  SLACK_RESIDENT_NAME    island resident name (default "Slackbot")
+  SLACK_RELAY_ALL        "true" relays all island chat (default: mentions + brain replies)
+  SLACK_STAY             "true" keeps the resident on exit (default: leave)
+  SLACK_POLL_MS          island poll interval ms (default 2000, min 500)
+  SLACK_HTTP_TIMEOUT_MS  cap on engine round-trips (default 10000)
+  SLACK_API_TIMEOUT_MS   cap on Slack API calls (default 15000)
+  ENGINE_URL             engine HTTP base (default http://localhost:8902)
+  ISLAND_SECRET          required when the engine sets one
+  SLACK_STATE_FILE       credential file (default <server/data>/slack-bridge.json)
+
+Behavior: spawns (or resumes) one persistent island resident, relays Slack
+messages to the island in real time via Socket Mode, and polls the island
+for new chat to post back. Slack messages appear on the island as
+"<@U123>: text"; the resident shows island replies in Slack. Ctrl-C leaves
+the island unless SLACK_STAY=true.`);
 }
 
 async function engine(path, { method = "GET", body = null } = {}) {
@@ -183,6 +223,7 @@ async function engine(path, { method = "GET", body = null } = {}) {
     method,
     headers: body ? { "content-type": "application/json" } : {},
     body: body ? JSON.stringify(body) : null,
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -192,6 +233,10 @@ async function engine(path, { method = "GET", body = null } = {}) {
 }
 
 async function main() {
+  if (process.argv.includes("--help")) {
+    printHelp();
+    process.exit(0);
+  }
   if (!BOT_TOKEN || !APP_TOKEN) {
     console.warn(
       "[slack-bridge] SLACK_BOT_TOKEN and SLACK_APP_TOKEN are not both set. " +
@@ -203,6 +248,9 @@ async function main() {
     console.warn("[slack-bridge] SLACK_CHANNEL is not set. Bridge not started.");
     process.exit(0);
   }
+  process.on("unhandledRejection", (e) =>
+    console.warn("[slack-bridge] unhandled rejection:", e?.message ?? e)
+  );
 
   // Reach the engine (retry 3x), then spawn our resident.
   let health = null;
@@ -223,8 +271,28 @@ async function main() {
   // Resume the previous resident when its credentials are still valid;
   // otherwise spawn fresh. Saved {id, token} live in slack-bridge.json —
   // the same persistence pattern as server/grok-bot.js — so restarts never
-  // accumulate duplicate residents.
-  const res = await resolveResident(engine, { name: RESIDENT_NAME, secret: ISLAND_SECRET });
+  // accumulate duplicate residents. Transient failures retry with backoff;
+  // auth failures (bad ISLAND_SECRET) exit immediately.
+  let res = null;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      res = await resolveResident(engine, { name: RESIDENT_NAME, secret: ISLAND_SECRET });
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (isAuthError(err)) {
+        console.error(`[slack-bridge] fatal: ${err.message} — check ISLAND_SECRET.`);
+        process.exit(1);
+      }
+      console.warn(`[slack-bridge] resident setup failed (attempt ${attempt}/5): ${err.message}`);
+      if (attempt < 5) await sleep(Math.min(15000, 2000 * 2 ** (attempt - 1)));
+    }
+  }
+  if (!res) {
+    console.error(`[slack-bridge] fatal: could not set up island resident: ${lastErr?.message}`);
+    process.exit(1);
+  }
   const residentId = res.id;
   const residentToken = res.token;
   const residentName = res.name;
@@ -242,7 +310,22 @@ async function main() {
       : `[slack-bridge] spawned resident "${residentName}" on the island.`
   );
 
-  const app = new App({ token: BOT_TOKEN, appToken: APP_TOKEN, socketMode: true });
+  const app = new App({
+    token: BOT_TOKEN,
+    appToken: APP_TOKEN,
+    socketMode: true,
+    clientOptions: { timeout: SLACK_API_TIMEOUT_MS },
+  });
+
+  // Fail fast on a bad Slack token with a clear message, instead of a
+  // cryptic Socket Mode failure after startup.
+  try {
+    const auth = await app.client.auth.test();
+    console.log(`[slack-bridge] slack auth ok as @${auth.user} (team ${auth.team})`);
+  } catch (err) {
+    console.error(`[slack-bridge] fatal: slack auth failed: ${err.message} — check SLACK_BOT_TOKEN.`);
+    process.exit(1);
+  }
 
   // Slack -> island
   app.event("message", async ({ event, say }) => {
@@ -260,6 +343,7 @@ async function main() {
   // Island -> Slack (polling)
   let stopping = false;
   async function poll() {
+    const t0 = Date.now();
     try {
       const raw = await engine(`/chat?limit=20`);
       const entries = Array.isArray(raw) ? raw : raw.chat ?? [];
@@ -284,6 +368,8 @@ async function main() {
     } catch (err) {
       console.warn("[slack-bridge] island poll failed:", err.message);
     } finally {
+      const dt = Date.now() - t0;
+      if (dt > 5000) console.warn(`[slack-bridge] slow island poll: ${dt}ms`);
       persistState();
       if (!stopping) setTimeout(poll, POLL_MS);
     }
@@ -293,11 +379,8 @@ async function main() {
     if (stopping) return;
     stopping = true;
     console.log(`\n[slack-bridge] ${signal} received, shutting down...`);
-    try {
-      await app.stop();
-    } catch {
-      /* already stopped */
-    }
+    // Don't let a hung Socket Mode connection stall shutdown.
+    await Promise.race([app.stop().catch(() => {}), sleep(5000)]);
     if (!STAY) {
       try {
         await engine("/leave", {
@@ -320,7 +403,9 @@ async function main() {
 
   await app.start();
   console.log(
-    `[slack-bridge] listening on ${CHANNEL} (relayAll=${RELAY_ALL}). Ctrl-C to stop.`
+    `[slack-bridge] listening on ${CHANNEL} (poll ${POLL_MS}ms, ` +
+      `${RELAY_ALL ? "relaying all island chat" : "relaying mentions + brain replies"}, ` +
+      `stay=${STAY}). Ctrl-C to stop.`
   );
   poll();
 }
