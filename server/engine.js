@@ -353,21 +353,43 @@ class Engine {
     return this._pushChat({ fromId: null, fromName: 'island', text, kind: 'system' });
   }
 
-  // say(id, text, {to}): append the message; if `to` names a roster (built-in)
-  // agent, generate its rule-based brain reply as a second entry.
+  // Resolve an agent reference: an id first, then a case-insensitive name
+  // match (first in spawn order). Returns the agent record or null.
+  _resolveAgent(ref) {
+    if (ref === undefined || ref === null) return null;
+    const key = String(ref);
+    if (this.agents[key]) return this.agents[key];
+    const low = key.toLowerCase();
+    for (const id of this.order) {
+      const a = this.agents[id];
+      if (a && a.name.toLowerCase() === low) return a;
+    }
+    return null;
+  }
+
+  // say(id, text, {to}): append the message; `to` may be an agent id or a
+  // resident name (case-insensitive). The entry records toId/toName so
+  // directed messages are distinguishable from public chat. If `to` names
+  // a roster (built-in) agent, generate its rule-based brain reply as a
+  // second entry, addressed back at the sender.
   // Returns {entry, replyEntry|null}. Throws on unknown agent / empty text.
   say(id, text, opts = {}) {
     const a = this.agents[id];
     if (!a) throw new Error('unknown agent: ' + id);
     text = String(text || '').trim().slice(0, 500);
     if (!text) throw new Error('empty message');
-    const entry = this._pushChat({ fromId: a.id, fromName: a.name, text, kind: 'say' });
+    const target = this._resolveAgent(opts.to);
+    const entry = this._pushChat({
+      fromId: a.id, fromName: a.name, text, kind: 'say',
+      ...(target ? { toId: target.id, toName: target.name } : {}),
+    });
     let replyEntry = null;
-    const target = opts.to ? this.agents[opts.to] : null;
-    if (target && !target.external) {
+    if (target && !target.external && target.id !== a.id) {
       replyEntry = this._pushChat({
         fromId: target.id,
         fromName: target.name,
+        toId: a.id,
+        toName: a.name,
         text: this.chatBrain(target.id, text),
         kind: 'brain',
       });

@@ -77,7 +77,8 @@ export function mentioned(text, name) {
  */
 export function shouldRespond(entry, name) {
   if (!entry || typeof entry.text !== "string" || entry.text.trim() === "") return false;
-  if (entry.fromName === name || entry.fromId === undefined) return false;
+  if (entry.kind === "system") return false; // join/leave announcements (fromId is null, not undefined)
+  if (entry.fromName === name || entry.fromId === undefined || entry.fromId === null) return false;
   if (entry.toName && entry.toName.toLowerCase() === String(name).toLowerCase()) return true;
   return mentioned(entry.text, name);
 }

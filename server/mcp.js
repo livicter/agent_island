@@ -24,9 +24,15 @@ import {
 const ENGINE_URL = process.env.ENGINE_URL || "http://localhost:8902";
 const ISLAND_SECRET = process.env.ISLAND_SECRET || "";
 
-// Residents spawned through this MCP session: name(lowercased) -> { id, token }.
+// Residents spawned through this MCP session: normalized name -> { id, token }.
 // Tokens are never logged or returned verbatim to the client.
 const residents = new Map();
+
+// Normalize exactly like engine.spawnResident (trim, 24 chars, fallback),
+// so lookups always match the stored entry.
+function nameKey(name) {
+  return (String(name || "Wanderer").trim().slice(0, 24) || "Wanderer").toLowerCase();
+}
 
 async function engine(path, { method = "GET", body = null } = {}) {
   let res;
@@ -49,8 +55,8 @@ async function engine(path, { method = "GET", body = null } = {}) {
 }
 
 function residentOrThrow(name) {
-  const r = residents.get(String(name).toLowerCase());
-  if (!r) {
+  const r = residents.get(nameKey(name));
+  if (!r || r.pending) {
     throw new Error(
       `No resident named "${name}" spawned in this MCP session. Use island_spawn_resident first.`
     );
@@ -92,7 +98,7 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Resident name (unique)." },
+        name: { type: "string", description: "Resident name (unique within this MCP session)." },
         color: { type: "string", description: "CSS color, e.g. '#ff8c42'. Defaults to a random pastel." },
       },
       required: ["name"],
@@ -166,15 +172,31 @@ async function handleTool(name, args = {}) {
     }
     case "island_spawn_resident": {
       const { name, color } = args;
-      const spawned = await engine("/spawn", {
-        method: "POST",
-        body: {
-          name,
-          ...(color ? { color } : {}),
-          ...(ISLAND_SECRET ? { secret: ISLAND_SECRET } : {}),
-        },
-      });
-      residents.set(String(spawned.name ?? name).toLowerCase(), {
+      // Normalize exactly like engine.spawnResident so the reservation key
+      // always matches the stored entry (engine trims/slices/falls back).
+      const key = nameKey(name);
+      if (residents.has(key)) {
+        throw new Error(
+          `A resident named "${name}" already exists in this MCP session. ` +
+            `Use island_leave to remove it first, or pick a different name.`
+        );
+      }
+      residents.set(key, { pending: true }); // reserve the name: guards against concurrent duplicate spawns
+      let spawned;
+      try {
+        spawned = await engine("/spawn", {
+          method: "POST",
+          body: {
+            name,
+            ...(color ? { color } : {}),
+            ...(ISLAND_SECRET ? { secret: ISLAND_SECRET } : {}),
+          },
+        });
+      } catch (err) {
+        residents.delete(key); // release the reservation on failure
+        throw err;
+      }
+      residents.set(key, {
         id: spawned.id,
         token: spawned.token,
       });
@@ -210,7 +232,7 @@ async function handleTool(name, args = {}) {
         method: "POST",
         body: { id: r.id, token: r.token },
       });
-      residents.delete(String(args.resident).toLowerCase());
+      residents.delete(nameKey(args.resident));
       return { ok: true, resident: args.resident };
     }
     default:

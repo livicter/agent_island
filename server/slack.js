@@ -88,6 +88,7 @@ const CHANNEL = process.env.SLACK_CHANNEL;
 const RESIDENT_NAME = process.env.SLACK_RESIDENT_NAME || "Slackbot";
 const RELAY_ALL = String(process.env.SLACK_RELAY_ALL || "false").toLowerCase() === "true";
 const ENGINE_URL = process.env.ENGINE_URL || "http://localhost:8902";
+const ISLAND_SECRET = process.env.ISLAND_SECRET || "";
 const POLL_MS = 4000;
 
 function sleep(ms) {
@@ -136,7 +137,10 @@ async function main() {
     process.exit(0);
   }
 
-  const spawned = await engine("/spawn", { method: "POST", body: { name: RESIDENT_NAME } });
+  const spawned = await engine("/spawn", {
+    method: "POST",
+    body: { name: RESIDENT_NAME, ...(ISLAND_SECRET ? { secret: ISLAND_SECRET } : {}) },
+  });
   const residentId = spawned.id;
   const residentToken = spawned.token;
   console.log(`[slack-bridge] spawned resident "${spawned.name}" on the island.`);

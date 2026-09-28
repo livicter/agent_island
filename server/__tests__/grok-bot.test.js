@@ -58,3 +58,10 @@ test("think returns a non-empty fallback line", async () => {
   assert.equal(typeof line, "string");
   assert.ok(line.trim().length > 0);
 });
+
+test("shouldRespond ignores system messages (own join announcement)", () => {
+  const join = { fromId: null, fromName: "island", text: "Grok arrived on the island.", kind: "system" };
+  assert.equal(shouldRespond(join, "Grok"), false);
+  const leave = { fromId: null, fromName: "island", text: "Grok left the island.", kind: "system" };
+  assert.equal(shouldRespond(leave, "Grok"), false);
+});
