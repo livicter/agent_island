@@ -4,8 +4,9 @@
  * ../js/config.js (via node:vm) as the single source of truth — config data
  * is never duplicated in this file.
  *
- * Wander logic, story events, and the rule-based chat brain are ported
- * 1:1 from the browser-local simulation in js/agents.js.
+ * Wander steps and the rule-based chat brain live in ../js/sim-core.js,
+ * the same file the browser loads. This file owns persistence, chat log,
+ * and story events.
  */
 'use strict';
 
@@ -13,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const crypto = require('crypto');
+const sim = require('../js/sim-core');
 
 // ---------------------------------------------------------------------------
 // Config: single source of truth = ../js/config.js
@@ -37,12 +39,6 @@ const ISLE = loadConfig();
 function rand(min, max) { return min + Math.random() * (max - min); }
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
-function randomPoint(within) {
-  const a = Math.random() * Math.PI * 2;
-  const r = Math.sqrt(Math.random()) * within;
-  return { x: Math.cos(a) * r, z: Math.sin(a) * r };
-}
-
 function randomPlace() {
   const places = ISLE.places || [];
   return places.length ? pick(places) : null;
@@ -59,19 +55,6 @@ function colorHex(c) {
   if (typeof c === 'number') return '#' + c.toString(16).padStart(6, '0');
   return String(c || '#9b7bff');
 }
-
-const ACTIVITIES = [
-  'gathering star sand',
-  'tending the garden',
-  'repairing wind chimes',
-  'mapping the shore',
-  'brewing moonberry tea',
-  'watching the moths',
-  'polishing tide glass',
-  'humming to the palms',
-  'sorting seashell notes',
-  'nap-sketching clouds',
-];
 
 const WEATHERS = ['Clear', 'Cloudy', 'Rain'];
 const CHAT_CAP = 200;
@@ -242,7 +225,7 @@ class Engine {
       speed: rand(1.2, 2.2),
       state: 'idle',
       status: 'working',
-      activity: pick(ACTIVITIES),
+      activity: pick(sim.ACTIVITIES),
       pause: rand(1, 4),
       heading: 0,
       external: !!isExternal,
@@ -519,25 +502,7 @@ class Engine {
 
     for (let i = 0; i < this.order.length; i++) {
       const a = this.agents[this.order[i]];
-      if (a.state === 'idle') {
-        a.pause -= dt;
-        if (a.pause <= 0) {
-          this._setTarget(a);
-          this._maybeFlipActivity(a);
-        }
-      } else {
-        const dx = a.tx - a.x, dz = a.tz - a.z;
-        const dist = Math.hypot(dx, dz);
-        if (dist < 0.4) {
-          a.state = 'idle';
-          a.pause = rand(2, 6);
-        } else {
-          const step = Math.min(dist, a.speed * dt);
-          a.x += (dx / dist) * step;
-          a.z += (dz / dist) * step;
-          a.heading = Math.atan2(dx, dz);
-        }
-      }
+      sim.stepAgent(a, dt, { places: ISLE.places, radius: ISLE.radius });
     }
 
     this.storyTimer -= dt;
@@ -595,27 +560,6 @@ class Engine {
     }
   }
 
-  _setTarget(agent) {
-    const place = randomPlace();
-    if (place && Math.random() < 0.7) {
-      agent.tx = place.x + rand(-6, 6);
-      agent.tz = place.z + rand(-6, 6);
-    } else {
-      const p = randomPoint(34);
-      agent.tx = p.x; agent.tz = p.z;
-    }
-    const c = clampToIsland(agent.tx, agent.tz);
-    agent.tx = c.x; agent.tz = c.z;
-    agent.state = 'walking';
-  }
-
-  _maybeFlipActivity(agent) {
-    if (Math.random() < 0.25) {
-      agent.status = Math.random() < 0.7 ? 'working' : 'idle';
-      agent.activity = pick(ACTIVITIES);
-    }
-  }
-
   _fireStoryEvent() {
     const templates = ISLE.storyTemplates || [];
     const names = this.order
@@ -649,93 +593,18 @@ class Engine {
     return event;
   }
 
-  // -- rule-based chat brain (ported 1:1 from js/agents.js) --------------------------
-  _placeByName(text) {
-    const places = ISLE.places || [];
-    const low = String(text).toLowerCase();
-    for (const p of places) {
-      if (low.indexOf(String(p.name).toLowerCase()) !== -1) return p;
-    }
-    return null;
-  }
-
-  _otherAgentByName(text) {
-    const low = String(text).toLowerCase();
-    for (const id of this.order) {
-      const a = this.agents[id];
-      if (low.indexOf(a.name.toLowerCase()) !== -1) return a;
-    }
-    return null;
-  }
-
+  // Rule-based reply. Implementation is js/sim-core.js (also loaded by the browser).
   chatBrain(id, text) {
     const a = this.agents[id];
     if (!a) return "Hmm, I don't see that resident on the island.";
-    text = String(text || '');
-    const low = text.toLowerCase();
-    const islandName = (ISLE && ISLE.name) || 'Agent Island';
-
-    // farewell
-    if (/\bbye\b|\bgoodbye\b|\bsee you\b/.test(low)) {
-      return 'See you around ' + islandName + ', traveler. ' +
-        (a.status === 'working' ? 'Back to ' + a.activity + ' for me.' : "I'll be right here, soaking it in.");
-    }
-    // greeting
-    if (/\b(hi|hello|hey|howdy|yo)\b/.test(low) && !/how are you/.test(low)) {
-      return 'Hey there! Welcome to ' + islandName + '. I\'m ' + a.name +
-        (a.status === 'working' ? ', currently ' + a.activity + '.' : ', just idling and enjoying the breeze.');
-    }
-    // how are you
-    if (/how are you|how\'s it going|how are things/.test(low)) {
-      return a.status === 'working'
-        ? 'Pretty great — I\'m ' + a.activity + ' right now. Keeps me busy and happy.'
-        : 'Relaxed and sun-warmed. Honestly, ' + islandName + ' is hard to beat.';
-    }
-    // place question
-    const place = this._placeByName(text);
-    if (place && /\b(where|what|tell|about|place)\b/.test(low)) {
-      return place.name + '? Oh, I love it there. ' +
-        'It\'s one of my favorite spots to hang out when I\'m ' + a.activity + '. ' +
-        'You should go see it for yourself — the vibe is unreal.';
-    }
-    // opinion about another agent
-    if (/\bwho\b/.test(low)) {
-      const other = this._otherAgentByName(text);
-      if (other && other.id !== id) {
-        return other.name + '? ' + pick([
-          'Absolute legend. Always ' + other.activity + ' like it\'s an art form.',
-          'Sweet one, that. We crossed paths while they were ' + other.activity + ' — total pro.',
-          'A good friend of mine. If you chat with them, ask about their latest adventures.'
-        ]);
-      }
-    }
-    // bring your muse
-    if (/\bmuse\b|\bbring\b|\bjoin\b/.test(low)) {
-      return 'Want to bring your own muse here? Just click "Bring your Muse" and they\'ll get their own little island body. We\'d love to meet them!';
-    }
-    // weather / time vibe
-    if (/\bweather\b|\btime\b|\bday\b|\bnight\b|\bsky\b/.test(low)) {
-      return pick([
-        'Perpetual golden hour here, honestly. The light never quite leaves ' + islandName + '.',
-        'The sky\'s doing that dreamy pastel thing again. Perfect weather for ' + a.activity + '.',
-        'Warm breeze, soft glow, moths everywhere. It\'s always a good time on the island.'
-      ]);
-    }
-    // fallback from config
-    const fallbacks = (ISLE && ISLE.chatFallbacks) || ['Interesting... tell me more.'];
-    const p = this._placeByName(text) || randomPlace();
-    let reply = pick(fallbacks).replace(/\{p\}/g, p ? p.name : 'the shore');
-    if (Math.random() < 0.35) {
-      const asides = {
-        cheerful: '*bounces a little* ',
-        dreamy: '*gazes at the horizon* ',
-        grumpy: '*grumbles fondly* ',
-        curious: '*tilts head* ',
-        wise: '*nods slowly* '
-      };
-      reply = (asides[a.personality] || '*thinks* ') + reply;
-    }
-    return reply;
+    return sim.chatReply({
+      agent: a,
+      text,
+      islandName: (ISLE && ISLE.name) || 'Agent Island',
+      places: ISLE.places || [],
+      others: this.order.map((oid) => this.agents[oid]),
+      fallbacks: ISLE.chatFallbacks,
+    });
   }
 
   // -- persistence ---------------------------------------------------------------
