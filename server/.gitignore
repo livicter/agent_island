@@ -4,3 +4,6 @@ data/*.json
 
 # Dependencies — install via npm.
 node_modules/
+
+# Secrets. Never commit.
+.env
