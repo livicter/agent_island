@@ -15,6 +15,7 @@ const path = require('path');
 const vm = require('vm');
 const crypto = require('crypto');
 const sim = require('../js/sim-core');
+const llm = require('./llm');
 
 // ---------------------------------------------------------------------------
 // Config: single source of truth = ../js/config.js
@@ -364,13 +365,10 @@ class Engine {
     return null;
   }
 
-  // say(id, text, {to}): append the message; `to` may be an agent id or a
-  // resident name (case-insensitive). The entry records toId/toName so
-  // directed messages are distinguishable from public chat. If `to` names
-  // a roster (built-in) agent, generate its rule-based brain reply as a
-  // second entry, addressed back at the sender.
-  // Returns {entry, replyEntry|null}. Throws on unknown agent / empty text.
-  say(id, text, opts = {}) {
+  // say(id, text, {to, fetchImpl}): append the message. `to` may be an agent
+  // id or a resident name. Roster replies use the LLM when LLM_API_KEY is
+  // set, otherwise the shared template brain. fetchImpl is for tests.
+  async say(id, text, opts = {}) {
     const a = this.agents[id];
     if (!a) throw new Error('unknown agent: ' + id);
     text = String(text || '').trim().slice(0, 500);
@@ -382,16 +380,26 @@ class Engine {
     });
     let replyEntry = null;
     if (target && !target.external && target.id !== a.id) {
+      const replyText = await this._brainText(target, text, opts.fetchImpl);
       replyEntry = this._pushChat({
         fromId: target.id,
         fromName: target.name,
         toId: a.id,
         toName: a.name,
-        text: this.chatBrain(target.id, text),
+        text: replyText.text,
         kind: 'brain',
+        source: replyText.source,
       });
     }
     return { entry, replyEntry };
+  }
+
+  async _brainText(agent, text, fetchImpl) {
+    const fallback = this.chatBrain(agent.id, text);
+    if (!llm.enabled()) return { text: fallback, source: 'template' };
+    const live = await llm.complete(agent, text, ISLE.name, fetchImpl);
+    if (!live) return { text: fallback, source: 'template' };
+    return { text: live, source: 'llm' };
   }
 
   // -- agent-to-agent conversations -----------------------------------------------

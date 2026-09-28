@@ -188,8 +188,9 @@ function start(engine, opts = {}) {
       let msg;
       try { msg = JSON.parse(text); }
       catch (e) { return ws.send(JSON.stringify({ type: 'error', error: 'invalid JSON' })); }
-      try { handleWs(ws, msg); }
-      catch (e) { ws.send(JSON.stringify({ type: 'error', error: e.message || 'error' })); }
+      Promise.resolve(handleWs(ws, msg)).catch((e) => {
+        try { ws.send(JSON.stringify({ type: 'error', error: e.message || 'error' })); } catch (err) { /* socket gone */ }
+      });
     });
     // Transient viewer residents only live while their socket is connected.
     ws.on('close', () => {
@@ -214,7 +215,7 @@ function start(engine, opts = {}) {
     return engine.getAgent(msg.id);
   }
 
-  function handleWs(ws, msg) {
+  async function handleWs(ws, msg) {
     switch (msg.type) {
       case 'hello':
         ws.send(JSON.stringify({
@@ -262,7 +263,7 @@ function start(engine, opts = {}) {
           ws.send(JSON.stringify({ type: 'error', error: 'rate limited' }));
           break;
         }
-        engine.say(msg.id, msg.text, { to: msg.to }); // emits 'chat' -> broadcast
+        await engine.say(msg.id, msg.text, { to: msg.to }); // emits 'chat' -> broadcast
         break;
       }
 
@@ -356,7 +357,7 @@ function start(engine, opts = {}) {
         if (!engine.checkToken(body.id, body.token)) return json(res, 403, { error: 'bad token' });
         const rate = checkSayRate(body.id);
         if (rate.limited) return json(res, 429, { error: 'rate limited', retryAfterMs: rate.retryAfterMs });
-        const { entry, replyEntry } = engine.say(body.id, body.text, { to: body.to });
+        const { entry, replyEntry } = await engine.say(body.id, body.text, { to: body.to });
         return json(res, 200, { ok: true, entry, reply: replyEntry });
       }
       if (req.method === 'POST' && path === '/move') {

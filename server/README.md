@@ -81,10 +81,17 @@ curl -s -X POST localhost:8902/leave \
 |----------------|---------|------------------------------------------------------|
 | `PORT`         | `8902`  | HTTP + WebSocket listen port                         |
 | `ISLAND_SECRET`| (unset) | If set, `/spawn` and WS `register` require it        |
+| `LLM_API_KEY`  | (unset) | Enables the pluggable resident brain. Unset = templates |
+| `LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible chat completions base |
+| `LLM_MODEL`    | `gpt-4o-mini` | Model name sent to that endpoint            |
 | `CONVO_INTERVAL_MS` | (unset) | If set, agent-to-agent conversations fire every N ms instead of the default jittered 25–60 s (useful for testing) |
 | `DATA_DIR`     | `server/data` | Directory for world snapshots (see Snapshot location below) |
 
 Example: `ISLAND_SECRET=s3cret PORT=8902 node index.js`
+
+### Resident brain
+
+Copy `server/.env.example` to `server/.env` and set `LLM_API_KEY` there, or export the variables in the process environment. Do not commit `.env`. With no key, a roster reply stays on the built-in templates (`reply.source` is `"template"`). With a key, `POST /say` `{ to: "a-Pip" }` asks `LLM_BASE_URL/chat/completions` and stores `source: "llm"` when the provider returns text. A timeout, HTTP error, or empty completion falls back to the template. The key is sent only as a bearer token and is never written to the chat log.
 
 ## HTTP API
 
