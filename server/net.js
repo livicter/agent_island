@@ -45,6 +45,40 @@ function start(engine, opts = {}) {
     return { limited: false, retryAfterMs: 0 };
   }
 
+  // Spawn protection: cap total external residents (env MAX_EXTERNAL_RESIDENTS,
+  // default 50) and rate-limit registrations (1 per SPAWN_COOLDOWN_MS per
+  // client) so a hostile or buggy client can't bloat the world or the
+  // snapshot with unlimited residents. `say` is rate-limited; spawn was not.
+  const MAX_EXTERNAL = Math.max(1, parseInt(process.env.MAX_EXTERNAL_RESIDENTS || "50", 10) || 50);
+  const SPAWN_COOLDOWN_MS = 10000;
+  const lastSpawnAt = new Map(); // client key -> timestamp of last accepted spawn
+  function externalCount() {
+    let n = 0;
+    for (const id of engine.order) {
+      const a = engine.agents[id];
+      if (a && a.external) n++;
+    }
+    return n;
+  }
+  function checkSpawnCapacity() {
+    return externalCount() < MAX_EXTERNAL;
+  }
+  function checkSpawnRate(key) {
+    const now = Date.now();
+    // prune occasionally: drop entries older than 2x the cooldown window
+    if (lastSpawnAt.size >= 1000 || Math.random() < 0.01) {
+      for (const [k, t] of lastSpawnAt) {
+        if (now - t > SPAWN_COOLDOWN_MS * 2) lastSpawnAt.delete(k);
+      }
+    }
+    const last = lastSpawnAt.get(key);
+    if (last !== undefined && now - last < SPAWN_COOLDOWN_MS) {
+      return { limited: true, retryAfterMs: SPAWN_COOLDOWN_MS - (now - last) };
+    }
+    lastSpawnAt.set(key, now);
+    return { limited: false, retryAfterMs: 0 };
+  }
+
   server.on('upgrade', (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
@@ -135,6 +169,18 @@ function start(engine, opts = {}) {
 
       case 'register': {
         checkSecret(msg.secret);
+        if (!checkSpawnCapacity()) {
+          ws.send(JSON.stringify({ type: 'error', error: `island full (max ${MAX_EXTERNAL} external residents)` }));
+          break;
+        }
+        {
+          const now = Date.now();
+          if (ws._lastRegisterAt !== undefined && now - ws._lastRegisterAt < SPAWN_COOLDOWN_MS) {
+            ws.send(JSON.stringify({ type: 'error', error: 'spawn rate limited' }));
+            break;
+          }
+          ws._lastRegisterAt = now;
+        }
         // transient: true marks a casual viewer (e.g. a browser tab that just
         // wants to chat). The resident is removed when this socket closes and
         // is never persisted. Omitted/false keeps the classic behavior: a
@@ -249,6 +295,13 @@ function start(engine, opts = {}) {
       if (req.method === 'POST' && path === '/spawn') {
         const body = await readBody(req);
         if (SECRET && body.secret !== SECRET) return json(res, 403, { error: 'invalid secret' });
+        if (!checkSpawnCapacity()) {
+          return json(res, 429, { error: `island full (max ${MAX_EXTERNAL} external residents)` });
+        }
+        const rate = checkSpawnRate('ip:' + (req.socket.remoteAddress || 'unknown'));
+        if (rate.limited) {
+          return json(res, 429, { error: 'spawn rate limited', retryAfterMs: rate.retryAfterMs });
+        }
         const r = engine.spawnResident({ name: body.name, color: body.color });
         return json(res, 200, { id: r.id, token: r.token, name: r.name });
       }

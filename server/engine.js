@@ -336,21 +336,43 @@ class Engine {
     return this._pushChat({ fromId: null, fromName: 'island', text, kind: 'system' });
   }
 
-  // say(id, text, {to}): append the message; if `to` names a roster (built-in)
-  // agent, generate its rule-based brain reply as a second entry.
+  // Resolve an agent reference: an id first, then a case-insensitive name
+  // match (first in spawn order). Returns the agent record or null.
+  _resolveAgent(ref) {
+    if (ref === undefined || ref === null) return null;
+    const key = String(ref);
+    if (this.agents[key]) return this.agents[key];
+    const low = key.toLowerCase();
+    for (const id of this.order) {
+      const a = this.agents[id];
+      if (a && a.name.toLowerCase() === low) return a;
+    }
+    return null;
+  }
+
+  // say(id, text, {to}): append the message; `to` may be an agent id or a
+  // resident name (case-insensitive). The entry records toId/toName so
+  // directed messages are distinguishable from public chat. If `to` names
+  // a roster (built-in) agent, generate its rule-based brain reply as a
+  // second entry, addressed back at the sender.
   // Returns {entry, replyEntry|null}. Throws on unknown agent / empty text.
   say(id, text, opts = {}) {
     const a = this.agents[id];
     if (!a) throw new Error('unknown agent: ' + id);
     text = String(text || '').trim().slice(0, 500);
     if (!text) throw new Error('empty message');
-    const entry = this._pushChat({ fromId: a.id, fromName: a.name, text, kind: 'say' });
+    const target = this._resolveAgent(opts.to);
+    const entry = this._pushChat({
+      fromId: a.id, fromName: a.name, text, kind: 'say',
+      ...(target ? { toId: target.id, toName: target.name } : {}),
+    });
     let replyEntry = null;
-    const target = opts.to ? this.agents[opts.to] : null;
-    if (target && !target.external) {
+    if (target && !target.external && target.id !== a.id) {
       replyEntry = this._pushChat({
         fromId: target.id,
         fromName: target.name,
+        toId: a.id,
+        toName: a.name,
         text: this.chatBrain(target.id, text),
         kind: 'brain',
       });
@@ -368,6 +390,8 @@ class Engine {
 
   // Pick a pair of agents within ~8 units of each other. Prefer pairs where
   // at least one is near a patio/place (within ~7 of a place x,z).
+  // NPC-only: external residents are driven by their owners, so the
+  // autonomous chatter never puts words in a bot's mouth.
   // Returns {a, b} or null when no close pair exists.
   _pickConvoPair() {
     if (this.order.length < 2) return null;
@@ -380,6 +404,7 @@ class Engine {
       for (let j = i + 1; j < this.order.length; j++) {
         const a = this.agents[this.order[i]];
         const b = this.agents[this.order[j]];
+        if (a.external || b.external) continue;
         if (Math.hypot(a.x - b.x, a.z - b.z) <= 8) {
           pairs.push([a, b]);
           if (nearPlace(a) || nearPlace(b)) patioPairs.push([a, b]);
@@ -404,9 +429,8 @@ class Engine {
   triggerConversation() {
     let pair = this._pickConvoPair();
     if (!pair && this.order.length >= 2) {
-      const a = this.agents[this.order[0]];
-      const b = this.agents[this.order[1]];
-      if (a && b && a !== b) pair = { a, b };
+      const npcs = this.order.map((id) => this.agents[id]).filter((a) => a && !a.external);
+      if (npcs.length >= 2) pair = { a: npcs[0], b: npcs[1] };
     }
     if (!pair) return null;
     return this._emitConversation(pair.a, pair.b);
