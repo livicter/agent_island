@@ -246,13 +246,25 @@ class Engine {
   // wants to chat): they live on the island while connected but are removed
   // when their socket closes and are never written to the snapshot.
   spawnResident({ name, color, personality, transient }) {
+    const clean = String(name || 'Wanderer').trim().replace(/\s+/g, ' ').slice(0, 24) || 'Wanderer';
+    // Permanent names cannot impersonate a roster resident or another
+    // permanent resident. Transient viewers (often all named "Traveler")
+    // may share a name; they have no lasting identity.
+    if (!transient) {
+      const low = clean.toLowerCase();
+      for (const id of this.order) {
+        const other = this.agents[id];
+        if (other.transient) continue;
+        if (other.name.toLowerCase() === low) throw new Error('name taken');
+      }
+    }
     let id;
     do {
       id = 'ext-' + crypto.randomBytes(4).toString('hex'); // 8 hex chars
     } while (this.agents[id]);
     const token = crypto.randomBytes(16).toString('hex'); // 32 chars
     const agent = this._spawnAgent(
-      { id, name: String(name || 'Wanderer').trim().slice(0, 24) || 'Wanderer',
+      { id, name: clean,
         color: color || '#9b7bff',
         personality: personality || 'curious' },
       true

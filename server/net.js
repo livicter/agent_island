@@ -28,7 +28,16 @@ function start(engine, opts = {}) {
   // residents. In-memory Map; stale entries are pruned on insert so it
   // can't grow unboundedly.
   const SAY_COOLDOWN_MS = 2000;
+  const MOVE_COOLDOWN_MS = 200;
+  const SPAWN_WINDOW_MS = 60_000;
+  const SPAWN_MAX = Number(process.env.SPAWN_MAX || 6);
+  const MAX_PERMANENT = Number(process.env.MAX_EXTERNAL || 40);
+  const MAX_TRANSIENT = Number(process.env.MAX_TRANSIENT || 80);
+  const MAX_CLIENTS = Number(process.env.MAX_CLIENTS || 100);
+  const MAX_WS_BYTES = 8192;
   const lastSayAt = new Map(); // id -> timestamp of last accepted say
+  const lastMoveAt = new Map();
+  const spawnHits = new Map(); // ip -> timestamps in the current window
   function checkSayRate(id) {
     const now = Date.now();
     // prune occasionally: drop entries older than 2x the cooldown window
@@ -45,13 +54,52 @@ function start(engine, opts = {}) {
     return { limited: false, retryAfterMs: 0 };
   }
 
-  // Spawn protection: cap total external residents (env MAX_EXTERNAL_RESIDENTS,
-  // default 50) and rate-limit registrations (1 per SPAWN_COOLDOWN_MS per
-  // client) so a hostile or buggy client can't bloat the world or the
-  // snapshot with unlimited residents. `say` is rate-limited; spawn was not.
+  function clientIp(req) {
+    const xf = req && req.headers && req.headers['x-forwarded-for'];
+    if (typeof xf === 'string' && xf) return xf.split(',')[0].trim().slice(0, 80);
+    return (req && req.socket && req.socket.remoteAddress) || 'unknown';
+  }
+
+  function checkMoveRate(id) {
+    const now = Date.now();
+    const last = lastMoveAt.get(id);
+    if (last !== undefined && now - last < MOVE_COOLDOWN_MS) {
+      return { limited: true, retryAfterMs: MOVE_COOLDOWN_MS - (now - last) };
+    }
+    lastMoveAt.set(id, now);
+    return { limited: false, retryAfterMs: 0 };
+  }
+
+  // Burst cap on top of the 10s cooldown below: SPAWN_MAX accepted spawns
+  // per IP per minute (default 6).
+  function checkSpawnBurst(ip) {
+    const now = Date.now();
+    const arr = (spawnHits.get(ip) || []).filter((t) => now - t < SPAWN_WINDOW_MS);
+    if (arr.length >= SPAWN_MAX) {
+      spawnHits.set(ip, arr);
+      return { limited: true, retryAfterMs: SPAWN_WINDOW_MS - (now - arr[0]) };
+    }
+    arr.push(now);
+    spawnHits.set(ip, arr);
+    return { limited: false, retryAfterMs: 0 };
+  }
+
+  function assertRoom(transient) {
+    let ext = 0;
+    let trans = 0;
+    for (const a of engine.listAgents()) {
+      if (!a.external) continue;
+      if (a.transient) trans += 1;
+      else ext += 1;
+    }
+    if (transient && trans >= MAX_TRANSIENT) throw new Error('too many viewers');
+    if (!transient && ext >= MAX_PERMANENT) throw new Error('island is full');
+  }
+
+  // Existing cap: MAX_EXTERNAL_RESIDENTS (default 50) and 1 spawn / 10s / client.
   const MAX_EXTERNAL = Math.max(1, parseInt(process.env.MAX_EXTERNAL_RESIDENTS || "50", 10) || 50);
   const SPAWN_COOLDOWN_MS = 10000;
-  const lastSpawnAt = new Map(); // client key -> timestamp of last accepted spawn
+  const lastSpawnAt = new Map();
   function externalCount() {
     let n = 0;
     for (const id of engine.order) {
@@ -65,7 +113,6 @@ function start(engine, opts = {}) {
   }
   function checkSpawnRate(key) {
     const now = Date.now();
-    // prune occasionally: drop entries older than 2x the cooldown window
     if (lastSpawnAt.size >= 1000 || Math.random() < 0.01) {
       for (const [k, t] of lastSpawnAt) {
         if (now - t > SPAWN_COOLDOWN_MS * 2) lastSpawnAt.delete(k);
@@ -126,10 +173,20 @@ function start(engine, opts = {}) {
   clockTimer.unref();
 
   // ------------------------------------------------------------------ WS
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    if (wss.clients.size > MAX_CLIENTS) {
+      try { ws.close(1013, 'full'); } catch (e) { /* already gone */ }
+      return;
+    }
+    ws._ip = clientIp(req);
     ws.on('message', (raw) => {
+      const text = String(raw);
+      if (text.length > MAX_WS_BYTES) {
+        ws.send(JSON.stringify({ type: 'error', error: 'message too large' }));
+        return;
+      }
       let msg;
-      try { msg = JSON.parse(String(raw)); }
+      try { msg = JSON.parse(text); }
       catch (e) { return ws.send(JSON.stringify({ type: 'error', error: 'invalid JSON' })); }
       try { handleWs(ws, msg); }
       catch (e) { ws.send(JSON.stringify({ type: 'error', error: e.message || 'error' })); }
@@ -169,10 +226,18 @@ function start(engine, opts = {}) {
 
       case 'register': {
         checkSecret(msg.secret);
+        const burst = checkSpawnBurst(ws._ip || 'unknown');
+        if (burst.limited) throw new Error('rate limited');
         if (!checkSpawnCapacity()) {
           ws.send(JSON.stringify({ type: 'error', error: `island full (max ${MAX_EXTERNAL} external residents)` }));
           break;
         }
+        // transient: true marks a casual viewer (e.g. a browser tab that just
+        // wants to chat). The resident is removed when this socket closes and
+        // is never persisted. Omitted/false keeps the classic behavior: a
+        // permanent resident that must leave explicitly via POST /leave.
+        const transient = msg.transient === true;
+        assertRoom(transient);
         {
           const now = Date.now();
           if (ws._lastRegisterAt !== undefined && now - ws._lastRegisterAt < SPAWN_COOLDOWN_MS) {
@@ -181,11 +246,6 @@ function start(engine, opts = {}) {
           }
           ws._lastRegisterAt = now;
         }
-        // transient: true marks a casual viewer (e.g. a browser tab that just
-        // wants to chat). The resident is removed when this socket closes and
-        // is never persisted. Omitted/false keeps the classic behavior: a
-        // permanent resident that must leave explicitly via POST /leave.
-        const transient = msg.transient === true;
         const res = engine.spawnResident({ name: msg.name, color: msg.color, transient });
         if (transient) {
           ws._transientIds = ws._transientIds || [];
@@ -208,6 +268,11 @@ function start(engine, opts = {}) {
 
       case 'move': {
         authed(msg);
+        const rate = checkMoveRate(msg.id);
+        if (rate.limited) {
+          ws.send(JSON.stringify({ type: 'error', error: 'rate limited' }));
+          break;
+        }
         if (!engine.move(msg.id, msg.x, msg.z)) throw new Error('move rejected');
         break; // movement shows up in the 10 Hz delta stream
       }
@@ -289,15 +354,20 @@ function start(engine, opts = {}) {
         const body = await readBody(req);
         if (!engine.getAgent(body.id)) return json(res, 404, { error: 'unknown agent' });
         if (!engine.checkToken(body.id, body.token)) return json(res, 403, { error: 'bad token' });
+        const moveRate = checkMoveRate(body.id);
+        if (moveRate.limited) return json(res, 429, { error: 'rate limited', retryAfterMs: moveRate.retryAfterMs });
         if (!engine.move(body.id, body.x, body.z)) return json(res, 400, { error: 'move rejected' });
         return json(res, 200, { ok: true });
       }
       if (req.method === 'POST' && path === '/spawn') {
         const body = await readBody(req);
         if (SECRET && body.secret !== SECRET) return json(res, 403, { error: 'invalid secret' });
+        const burst = checkSpawnBurst(clientIp(req));
+        if (burst.limited) return json(res, 429, { error: 'rate limited', retryAfterMs: burst.retryAfterMs });
         if (!checkSpawnCapacity()) {
           return json(res, 429, { error: `island full (max ${MAX_EXTERNAL} external residents)` });
         }
+        assertRoom(false);
         const rate = checkSpawnRate('ip:' + (req.socket.remoteAddress || 'unknown'));
         if (rate.limited) {
           return json(res, 429, { error: 'spawn rate limited', retryAfterMs: rate.retryAfterMs });
