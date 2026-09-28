@@ -152,7 +152,7 @@ async function http(pathname, { method = "GET", body } = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-function waitFor(ws, type, timeoutMs = 15000) {
+export function waitFor(ws, type, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => {
       ws.off("message", onMsg);
@@ -163,6 +163,14 @@ function waitFor(ws, type, timeoutMs = 15000) {
       try {
         m = JSON.parse(String(raw));
       } catch {
+        return;
+      }
+      // Surface server rejections (bad secret, island full, rate limited)
+      // instead of hanging until the timeout.
+      if (m.type === "error" && m.error) {
+        clearTimeout(t);
+        ws.off("message", onMsg);
+        reject(new Error(String(m.error)));
         return;
       }
       if (m.type === type) {
@@ -185,6 +193,8 @@ class Bot {
     this.wanderTimer = null;
     this.reconnectDelay = 1000;
     this.closing = false;
+    this.epoch = 0; // invalidates stale reconnect timers after re-register
+    this._wsFactory = (url) => new WebSocket(url); // overridable in tests
   }
 
   log(...a) {
@@ -210,7 +220,7 @@ class Bot {
       clearState();
     }
     // Fresh registration over a throwaway socket (also proves the secret).
-    const ws = new WebSocket(wsUrl(ENGINE_URL));
+    const ws = this._wsFactory(wsUrl(ENGINE_URL));
     await new Promise((res, rej) => {
       ws.on("open", res);
       ws.on("error", rej);
@@ -279,9 +289,10 @@ class Bot {
 
   connect() {
     if (this.closing) return;
+    const epoch = ++this.epoch;
     const url = wsUrl(ENGINE_URL);
     this.log(`connecting to ${url}`);
-    const ws = new WebSocket(url);
+    const ws = this._wsFactory(url);
     this.ws = ws;
 
     ws.on("open", () => {
@@ -298,25 +309,29 @@ class Bot {
       } catch {
         return;
       }
+      const myId = this.creds?.id;
       switch (m.type) {
         case "welcome": {
-          const me = m.snapshot.agents?.find((a) => a.id === this.creds.id);
-          if (me) this.me = { x: me.x ?? 0, z: me.z ?? 0 };
+          if (myId) {
+            const me = m.snapshot.agents?.find((a) => a.id === myId);
+            if (me) this.me = { x: me.x ?? 0, z: me.z ?? 0 };
+          }
           break;
         }
         case "chat":
-          if (m.entry) void this.onChat(m.entry);
+          if (m.entry && this.creds) void this.onChat(m.entry);
           break;
         case "delta": {
-          const me = m.agents?.find((a) => a.id === this.creds.id);
-          if (me && me.x !== undefined) this.me = { x: me.x, z: me.z };
+          if (myId) {
+            const me = m.agents?.find((a) => a.id === myId);
+            if (me && me.x !== undefined) this.me = { x: me.x, z: me.z };
+          }
           break;
         }
         case "leave":
-          if (m.id === this.creds.id) {
-            this.log("our resident was removed; will re-register");
-            clearState();
-            this.shutdown(0);
+          if (myId && m.id === myId) {
+            this.log("our resident was removed; re-registering");
+            void this.reregister();
           }
           break;
         case "error":
@@ -328,7 +343,7 @@ class Bot {
     });
 
     const reconnect = () => {
-      if (this.closing) return;
+      if (this.closing || epoch !== this.epoch) return;
       clearTimeout(this.wanderTimer);
       const d = this.reconnectDelay;
       this.reconnectDelay = Math.min(30000, d * 2);
@@ -343,6 +358,33 @@ class Bot {
         /* noop */
       }
     });
+  }
+
+  // Our resident was removed server-side (admin action, snapshot wipe, …).
+  // Drop the dead credentials and register fresh instead of exiting.
+  async reregister() {
+    if (this.closing) return;
+    this.epoch++; // invalidate the old socket's pending reconnect timer
+    clearState();
+    this.creds = null;
+    try {
+      this.ws?.close();
+    } catch {
+      /* noop */
+    }
+    this.ws = null;
+    this.reconnectDelay = 1000;
+    try {
+      await this.ensureResident();
+    } catch (e) {
+      this.log("re-register failed:", e.message);
+      if (!this.closing) {
+        const t = setTimeout(() => this.reregister(), 5000);
+        t.unref?.();
+      }
+      return;
+    }
+    this.connect();
   }
 
   async shutdown(code) {
@@ -386,3 +428,5 @@ if (isMain) {
     process.exit(1);
   });
 }
+
+export { Bot };

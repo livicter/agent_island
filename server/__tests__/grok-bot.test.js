@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { wsUrl, mentioned, shouldRespond, pickWanderTarget, think } from "../grok-bot.js";
+import { wsUrl, mentioned, shouldRespond, pickWanderTarget, think, waitFor, Bot } from "../grok-bot.js";
 
 test("wsUrl converts http(s) to ws(s)", () => {
   assert.equal(wsUrl("http://localhost:8902"), "ws://localhost:8902");
@@ -64,4 +64,58 @@ test("shouldRespond ignores system messages (own join announcement)", () => {
   assert.equal(shouldRespond(join, "Grok"), false);
   const leave = { fromId: null, fromName: "island", text: "Grok left the island.", kind: "system" };
   assert.equal(shouldRespond(leave, "Grok"), false);
+});
+
+test("waitFor resolves on the awaited message type", async () => {
+  const { EventEmitter } = await import("node:events");
+  const ws = new EventEmitter();
+  const p = waitFor(ws, "registered", 1000);
+  ws.emit("message", JSON.stringify({ type: "welcome", snapshot: {} }));
+  ws.emit("message", JSON.stringify({ type: "registered", id: "ext-1" }));
+  const m = await p;
+  assert.equal(m.id, "ext-1");
+});
+
+test("waitFor rejects with the server error instead of hanging", async () => {
+  const { EventEmitter } = await import("node:events");
+  const ws = new EventEmitter();
+  const p = waitFor(ws, "registered", 5000);
+  ws.emit("message", JSON.stringify({ type: "error", error: "invalid secret" }));
+  await assert.rejects(p, /invalid secret/);
+});
+
+test("waitFor times out when nothing arrives", async () => {
+  const { EventEmitter } = await import("node:events");
+  const ws = new EventEmitter();
+  await assert.rejects(waitFor(ws, "registered", 20), /timeout waiting for registered/);
+});
+
+test("reregister drops dead creds and registers fresh", async () => {
+  const { EventEmitter } = await import("node:events");
+  const bot = new Bot();
+  bot.creds = { id: "ext-old", token: "tok-old", name: "Grok" };
+  const oldWs = new EventEmitter();
+  let closed = false;
+  oldWs.close = () => { closed = true; oldWs.emit("close"); };
+  bot.ws = oldWs;
+  const epochBefore = bot.epoch;
+  // stub the network registration: pretend the engine hands us a new resident
+  bot.ensureResident = async () => {
+    bot.creds = { id: "ext-new", token: "tok-new", name: "Grok" };
+  };
+  // fake socket factory for the fresh connect()
+  const newWs = new EventEmitter();
+  newWs.close = () => {};
+  newWs.send = () => {};
+  newWs.readyState = 1;
+  const seen = [];
+  bot._wsFactory = (url) => { seen.push(url); return newWs; };
+  // silence logs
+  bot.log = () => {};
+  await bot.reregister();
+  assert.equal(closed, true);
+  assert.equal(bot.creds.id, "ext-new");
+  assert.ok(bot.epoch > epochBefore, "epoch advanced to invalidate stale reconnect");
+  assert.equal(bot.ws, newWs);
+  assert.ok(seen.length >= 1, "connect() opened a fresh socket");
 });

@@ -66,3 +66,30 @@ test("public say has no toId/toName", () => {
   assert.equal(entry.toId, undefined);
   assert.equal(entry.toName, undefined);
 });
+
+test("autonomous conversations never put words in an external resident's mouth", () => {
+  const e = makeEngine();
+  const r = e.spawnResident({ name: "Botty", color: "#ffffff" });
+  const bot = e.agents[r.id];
+  const npc = e.agents["a-Fern"];
+  // park the bot right next to an NPC so proximity would once have paired them
+  bot.x = npc.x;
+  bot.z = npc.z;
+  for (let i = 0; i < 300; i++) {
+    const pair = e._pickConvoPair();
+    if (pair) {
+      assert.ok(!pair.a.external && !pair.b.external, "pair included an external resident");
+    }
+  }
+  // admin trigger fallback also stays NPC-only
+  for (const id of e.order) {
+    e.agents[id].x = (Math.random() - 0.5) * 60;
+    e.agents[id].z = (Math.random() - 0.5) * 60;
+  }
+  e.convoQueue = [];
+  e.triggerConversation();
+  assert.ok(e.convoQueue.length > 0, "expected fallback convo lines");
+  for (const q of e.convoQueue) {
+    assert.notEqual(q.entry.fromId, r.id, "convo line spoken by the bot");
+  }
+});

@@ -80,7 +80,13 @@ export async function resolveResident(engineCall, { name, secret, file = STATE_F
     try {
       const state = await engineCall("/state");
       if (snapshotHasResident(state, saved.id)) {
-        return { id: saved.id, token: saved.token, name: saved.name || name, resumed: true };
+        return {
+          id: saved.id,
+          token: saved.token,
+          name: saved.name || name,
+          resumed: true,
+          lastSeq: saved.lastSeq ?? -1,
+        };
       }
     } catch {
       /* fall through to spawn */
@@ -92,7 +98,7 @@ export async function resolveResident(engineCall, { name, secret, file = STATE_F
   });
   const creds = { id: spawned.id, token: spawned.token, name: spawned.name };
   saveState(creds, file);
-  return { ...creds, resumed: false };
+  return { ...creds, resumed: false, lastSeq: -1 };
 }
 
 // ---------------------------------------------------------------------------
@@ -218,14 +224,20 @@ async function main() {
   // otherwise spawn fresh. Saved {id, token} live in slack-bridge.json —
   // the same persistence pattern as server/grok-bot.js — so restarts never
   // accumulate duplicate residents.
-  const {
-    id: residentId,
-    token: residentToken,
-    name: residentName,
-    resumed,
-  } = await resolveResident(engine, { name: RESIDENT_NAME, secret: ISLAND_SECRET });
+  const res = await resolveResident(engine, { name: RESIDENT_NAME, secret: ISLAND_SECRET });
+  const residentId = res.id;
+  const residentToken = res.token;
+  const residentName = res.name;
+  // On resume, continue from the last relayed message so a bridge restart
+  // doesn't re-post pre-restart mentions to Slack. A fresh spawn relays
+  // recent history once (lastSeq = -1).
+  let lastSeq = res.lastSeq ?? -1;
+  const creds = { id: residentId, token: residentToken, name: residentName };
+  function persistState() {
+    saveState({ ...creds, lastSeq });
+  }
   console.log(
-    resumed
+    res.resumed
       ? `[slack-bridge] resumed resident "${residentName}" (${residentId}).`
       : `[slack-bridge] spawned resident "${residentName}" on the island.`
   );
@@ -246,7 +258,6 @@ async function main() {
   });
 
   // Island -> Slack (polling)
-  let lastSeq = -1;
   let stopping = false;
   async function poll() {
     try {
@@ -273,6 +284,7 @@ async function main() {
     } catch (err) {
       console.warn("[slack-bridge] island poll failed:", err.message);
     } finally {
+      persistState();
       if (!stopping) setTimeout(poll, POLL_MS);
     }
   }
@@ -298,6 +310,7 @@ async function main() {
       }
       clearState();
     } else {
+      persistState();
       console.log("[slack-bridge] SLACK_STAY=true — resident stays on the island.");
     }
     process.exit(0);

@@ -182,8 +182,23 @@ test("resolveResident resumes a saved resident still on the island", async () =>
     return { id: "ext-new", token: "tok-new", name: "Slackbot" };
   };
   const r = await resolveResident(fakeEngine, { name: "Slackbot", secret: "", file });
-  assert.deepEqual(r, { id: "ext-abc", token: "tok123", name: "Slackbot", resumed: true });
+  assert.deepEqual(r, { id: "ext-abc", token: "tok123", name: "Slackbot", resumed: true, lastSeq: -1 });
   assert.equal(spawned, 0);
+});
+
+test("resolveResident restores lastSeq so restarts don't re-relay", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slack-resolve-")), "s.json");
+  saveState({ id: "ext-abc", token: "tok123", name: "Slackbot", lastSeq: 42 }, file);
+  const fakeEngine = async (p) => {
+    if (p === "/state") return { agents: [{ id: "ext-abc" }] };
+    throw new Error("should not spawn");
+  };
+  const r = await resolveResident(fakeEngine, { name: "Slackbot", secret: "", file });
+  assert.equal(r.resumed, true);
+  assert.equal(r.lastSeq, 42);
 });
 
 test("resolveResident spawns fresh when the saved resident is gone", async () => {

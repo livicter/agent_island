@@ -242,7 +242,7 @@
     if (!e.text) return;
     // reply to our own chat-box request: resolve the promise; submitChat's
     // show() bubbles + speaks it, so don't double-speak here.
-    if (pendingChat && (e.fromId === pendingChat.to || (myCreds && e.to === myCreds.id))) {
+    if (pendingChat && (e.fromId === pendingChat.to || (myCreds && e.toId === myCreds.id))) {
       var r = pendingChat; pendingChat = null;
       clearTimeout(r.timer);
       r.resolve(String(e.text));
