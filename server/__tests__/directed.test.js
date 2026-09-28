@@ -17,10 +17,10 @@ function makeEngine() {
   return e;
 }
 
-test("say with `to` as a roster name yields a brain reply", () => {
+test("say with `to` as a roster name yields a brain reply", async () => {
   const e = makeEngine();
   const r = e.spawnResident({ name: "Prober", color: "#fff" });
-  const { entry, replyEntry } = e.say(r.id, "hello there", { to: "Fern" });
+  const { entry, replyEntry } = await e.say(r.id, "hello there", { to: "Fern" });
   assert.equal(entry.toId, "a-Fern");
   assert.equal(entry.toName, "Fern");
   assert.ok(replyEntry, "expected a brain reply");
@@ -30,39 +30,39 @@ test("say with `to` as a roster name yields a brain reply", () => {
   assert.equal(replyEntry.kind, "brain");
 });
 
-test("say `to` is case-insensitive and also accepts an id", () => {
+test("say `to` is case-insensitive and also accepts an id", async () => {
   const e = makeEngine();
   const r = e.spawnResident({ name: "Prober", color: "#fff" });
-  const byName = e.say(r.id, "hi", { to: "fErN" });
+  const byName = await e.say(r.id, "hi", { to: "fErN" });
   assert.equal(byName.entry.toId, "a-Fern");
-  const byId = e.say(r.id, "hi", { to: "a-Fern" });
+  const byId = await e.say(r.id, "hi", { to: "a-Fern" });
   assert.equal(byId.entry.toId, "a-Fern");
   assert.ok(byId.replyEntry, "expected a brain reply");
 });
 
-test("say with `to` naming an external resident records the recipient, no brain reply", () => {
+test("say with `to` naming an external resident records the recipient, no brain reply", async () => {
   const e = makeEngine();
   const a = e.spawnResident({ name: "Prober", color: "#fff" });
   const b = e.spawnResident({ name: "Buddy", color: "#000" });
-  const { entry, replyEntry } = e.say(a.id, "hey buddy", { to: "Buddy" });
+  const { entry, replyEntry } = await e.say(a.id, "hey buddy", { to: "Buddy" });
   assert.equal(entry.toId, b.id);
   assert.equal(entry.toName, "Buddy");
   assert.equal(replyEntry, null);
 });
 
-test("say with unknown `to` behaves as public chat", () => {
+test("say with unknown `to` behaves as public chat", async () => {
   const e = makeEngine();
   const r = e.spawnResident({ name: "Prober", color: "#fff" });
-  const { entry, replyEntry } = e.say(r.id, "hello?", { to: "Nobody Here" });
+  const { entry, replyEntry } = await e.say(r.id, "hello?", { to: "Nobody Here" });
   assert.equal(entry.toId, undefined);
   assert.equal(entry.toName, undefined);
   assert.equal(replyEntry, null);
 });
 
-test("public say has no toId/toName", () => {
+test("public say has no toId/toName", async () => {
   const e = makeEngine();
   const r = e.spawnResident({ name: "Prober", color: "#fff" });
-  const { entry } = e.say(r.id, "hello everyone");
+  const { entry } = await e.say(r.id, "hello everyone");
   assert.equal(entry.toId, undefined);
   assert.equal(entry.toName, undefined);
 });
