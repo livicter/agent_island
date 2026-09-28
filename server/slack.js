@@ -12,12 +12,88 @@
 //   SLACK_RELAY_ALL    "true" to relay all island chat, "false" (default) to
 //                      relay only messages that mention the resident name or
 //                      are brain/narrative entries
+//   SLACK_STAY         "true" to keep the resident on the island across
+//                      bridge restarts (default "false": leave on shutdown)
+//   ISLAND_SECRET      passed through on /spawn when the engine requires it
 //   ENGINE_URL         engine HTTP base (default http://localhost:8902)
+//   DATA_DIR           snapshot/state directory (default server/data)
+//
+// The resident's {id, token} are saved to server/data/slack-bridge.json so a
+// restart resumes the same resident instead of spawning duplicates — the
+// same persistence pattern as server/grok-bot.js.
 //
 // Run: node server/slack.js
 
 import boltPkg from "@slack/bolt";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 const { App } = boltPkg;
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const STATE_FILE =
+  process.env.SLACK_STATE_FILE ||
+  path.join(process.env.DATA_DIR || path.join(HERE, "data"), "slack-bridge.json");
+
+// ---------------------------------------------------------------------------
+// Resident persistence (exported for unit tests; mirrors grok-bot.js).
+// ---------------------------------------------------------------------------
+
+/** Load saved {id, token, name} or null when absent/unparseable. */
+export function loadState(file = STATE_FILE) {
+  try {
+    const s = JSON.parse(fs.readFileSync(file, "utf8"));
+    return s && typeof s.id === "string" && typeof s.token === "string" ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist {id, token, name} for resume across restarts. */
+export function saveState(state, file = STATE_FILE) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(state));
+}
+
+/** Forget saved credentials (after leaving the island). */
+export function clearState(file = STATE_FILE) {
+  try {
+    fs.unlinkSync(file);
+  } catch {
+    /* already gone */
+  }
+}
+
+/** True when the /state snapshot still contains our resident id. */
+export function snapshotHasResident(snapshot, id) {
+  return Array.isArray(snapshot?.agents) && snapshot.agents.some((a) => a?.id === id);
+}
+
+/**
+ * Resume the saved resident when its credentials are still valid, otherwise
+ * spawn fresh and save the new credentials. `engineCall` is (path, opts) ->
+ * JSON. Returns {id, token, name, resumed}.
+ */
+export async function resolveResident(engineCall, { name, secret, file = STATE_FILE }) {
+  const saved = loadState(file);
+  if (saved) {
+    try {
+      const state = await engineCall("/state");
+      if (snapshotHasResident(state, saved.id)) {
+        return { id: saved.id, token: saved.token, name: saved.name || name, resumed: true };
+      }
+    } catch {
+      /* fall through to spawn */
+    }
+  }
+  const spawned = await engineCall("/spawn", {
+    method: "POST",
+    body: { name, ...(secret ? { secret } : {}) },
+  });
+  const creds = { id: spawned.id, token: spawned.token, name: spawned.name };
+  saveState(creds, file);
+  return { ...creds, resumed: false };
+}
 
 // ---------------------------------------------------------------------------
 // Pure mapping helpers (exported for unit tests; no network here).
@@ -89,6 +165,7 @@ const RESIDENT_NAME = process.env.SLACK_RESIDENT_NAME || "Slackbot";
 const RELAY_ALL = String(process.env.SLACK_RELAY_ALL || "false").toLowerCase() === "true";
 const ENGINE_URL = process.env.ENGINE_URL || "http://localhost:8902";
 const ISLAND_SECRET = process.env.ISLAND_SECRET || "";
+const STAY = String(process.env.SLACK_STAY || "").toLowerCase() === "true";
 const POLL_MS = 4000;
 
 function sleep(ms) {
@@ -137,13 +214,21 @@ async function main() {
     process.exit(0);
   }
 
-  const spawned = await engine("/spawn", {
-    method: "POST",
-    body: { name: RESIDENT_NAME, ...(ISLAND_SECRET ? { secret: ISLAND_SECRET } : {}) },
-  });
-  const residentId = spawned.id;
-  const residentToken = spawned.token;
-  console.log(`[slack-bridge] spawned resident "${spawned.name}" on the island.`);
+  // Resume the previous resident when its credentials are still valid;
+  // otherwise spawn fresh. Saved {id, token} live in slack-bridge.json —
+  // the same persistence pattern as server/grok-bot.js — so restarts never
+  // accumulate duplicate residents.
+  const {
+    id: residentId,
+    token: residentToken,
+    name: residentName,
+    resumed,
+  } = await resolveResident(engine, { name: RESIDENT_NAME, secret: ISLAND_SECRET });
+  console.log(
+    resumed
+      ? `[slack-bridge] resumed resident "${residentName}" (${residentId}).`
+      : `[slack-bridge] spawned resident "${residentName}" on the island.`
+  );
 
   const app = new App({ token: BOT_TOKEN, appToken: APP_TOKEN, socketMode: true });
 
@@ -162,6 +247,7 @@ async function main() {
 
   // Island -> Slack (polling)
   let lastSeq = -1;
+  let stopping = false;
   async function poll() {
     try {
       const raw = await engine(`/chat?limit=20`);
@@ -187,9 +273,37 @@ async function main() {
     } catch (err) {
       console.warn("[slack-bridge] island poll failed:", err.message);
     } finally {
-      setTimeout(poll, POLL_MS);
+      if (!stopping) setTimeout(poll, POLL_MS);
     }
   }
+
+  async function shutdown(signal) {
+    if (stopping) return;
+    stopping = true;
+    console.log(`\n[slack-bridge] ${signal} received, shutting down...`);
+    try {
+      await app.stop();
+    } catch {
+      /* already stopped */
+    }
+    if (!STAY) {
+      try {
+        await engine("/leave", {
+          method: "POST",
+          body: { id: residentId, token: residentToken },
+        });
+        console.log("[slack-bridge] resident left the island.");
+      } catch (err) {
+        console.warn("[slack-bridge] leave failed:", err.message);
+      }
+      clearState();
+    } else {
+      console.log("[slack-bridge] SLACK_STAY=true — resident stays on the island.");
+    }
+    process.exit(0);
+  }
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 
   await app.start();
   console.log(

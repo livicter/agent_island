@@ -13,6 +13,11 @@ import {
   isFromSlack,
   shouldRelayIslandEntry,
   formatSlackToIsland,
+  loadState,
+  saveState,
+  clearState,
+  snapshotHasResident,
+  resolveResident,
 } from "../slack.js";
 
 const CHANNEL = "C123CHANNEL";
@@ -136,4 +141,81 @@ test("formatSlackToIsland prefixes with user mention", () => {
     formatSlackToIsland({ user: "U123", text: "hello island" }),
     "<@U123>: hello island"
   );
+});
+
+test("state helpers round-trip credentials", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slack-state-")), "slack-bridge.json");
+  assert.equal(loadState(file), null);
+  saveState({ id: "ext-abc", token: "tok123", name: "Slackbot" }, file);
+  assert.deepEqual(loadState(file), { id: "ext-abc", token: "tok123", name: "Slackbot" });
+  clearState(file);
+  assert.equal(loadState(file), null);
+  // corrupt file -> null, never throws
+  fs.writeFileSync(file, "not json{");
+  assert.equal(loadState(file), null);
+  // missing id/token -> null
+  fs.writeFileSync(file, JSON.stringify({ name: "Slackbot" }));
+  assert.equal(loadState(file), null);
+});
+
+test("snapshotHasResident finds our id", () => {
+  const snap = { agents: [{ id: "a-Fern" }, { id: "ext-abc" }] };
+  assert.equal(snapshotHasResident(snap, "ext-abc"), true);
+  assert.equal(snapshotHasResident(snap, "ext-gone"), false);
+  assert.equal(snapshotHasResident({}, "ext-abc"), false);
+  assert.equal(snapshotHasResident(null, "ext-abc"), false);
+});
+
+test("resolveResident resumes a saved resident still on the island", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slack-resolve-")), "s.json");
+  saveState({ id: "ext-abc", token: "tok123", name: "Slackbot" }, file);
+  let spawned = 0;
+  const fakeEngine = async (p) => {
+    if (p === "/state") return { agents: [{ id: "a-Fern" }, { id: "ext-abc" }] };
+    spawned++;
+    return { id: "ext-new", token: "tok-new", name: "Slackbot" };
+  };
+  const r = await resolveResident(fakeEngine, { name: "Slackbot", secret: "", file });
+  assert.deepEqual(r, { id: "ext-abc", token: "tok123", name: "Slackbot", resumed: true });
+  assert.equal(spawned, 0);
+});
+
+test("resolveResident spawns fresh when the saved resident is gone", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slack-resolve-")), "s.json");
+  saveState({ id: "ext-old", token: "tok-old", name: "Slackbot" }, file);
+  const calls = [];
+  const fakeEngine = async (p, opts = {}) => {
+    calls.push([p, opts]);
+    if (p === "/state") return { agents: [{ id: "a-Fern" }] };
+    return { id: "ext-new", token: "tok-new", name: "Slackbot" };
+  };
+  const r = await resolveResident(fakeEngine, { name: "Slackbot", secret: "s3cr3t", file });
+  assert.equal(r.resumed, false);
+  assert.equal(r.id, "ext-new");
+  assert.deepEqual(loadState(file), { id: "ext-new", token: "tok-new", name: "Slackbot" });
+  const spawnCall = calls.find(([p]) => p === "/spawn");
+  assert.equal(spawnCall[1].body.secret, "s3cr3t");
+});
+
+test("resolveResident spawns when no state is saved", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slack-resolve-")), "s.json");
+  const fakeEngine = async (p) => {
+    if (p === "/state") return { agents: [] };
+    return { id: "ext-fresh", token: "tok-fresh", name: "Slackbot" };
+  };
+  const r = await resolveResident(fakeEngine, { name: "Slackbot", secret: "", file });
+  assert.equal(r.resumed, false);
+  assert.equal(r.id, "ext-fresh");
 });
