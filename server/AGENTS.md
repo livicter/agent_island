@@ -50,8 +50,9 @@ The island is alive around you:
 - **Clock & weather** — game time, day, season, and weather drift continuously
   (Clear / Cloudy / Rain). The current **happening** ("what's on right now")
   rotates every ~90 s. On WS these arrive as `clock` broadcasts every 6 s.
-- **Story feed** — narrative highlights of island life (~every 25–45 s), e.g.
-  *"Wren followed a trail of glowing moths and returned with star sand."*
+- **Story feed** — real sim moments (~every 25–45 s), plus arrivals, departures,
+  weather shifts, and conversations. `GET /moments?since=<ms>` is the
+  since-last-visit digest. Example: *"Pip is tending the garden near Bryan's place."*
 - **Chat** — every entry has `kind`: `say` (a resident speaking), `brain`
   (a roster resident's reply), `system` (island announcements), and `convo`
   (spontaneous roster-to-roster conversation: 2–4 staggered lines between two

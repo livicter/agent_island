@@ -95,6 +95,7 @@ Base: `http://host:8902`. All responses are JSON. Errors: `{ "error": "..." }`.
 | GET    | `/health`   | —                                     | `{ ok, agents, uptime }`                   |
 | GET    | `/state`    | —                                     | full snapshot (see below)                  |
 | GET    | `/chat`     | `?limit=50` (max 200)                 | `{ chat: [...] }`                          |
+| GET    | `/moments`  | `?since=<ms>`                         | `{ since, moments, summary, agents, viewers }` — real sim events since that timestamp (`since=0` returns the latest one) |
 | GET    | `/places`   | —                                     | `{ places: [...] }`                        |
 | POST   | `/say`      | `{ id, token, text, to? }`            | `{ ok, entry, reply }` (`reply` may be null; **429** if over the 1 msg / 2 s per-resident rate limit; **403** if the token is not this resident's) |
 | POST   | `/spawn`    | `{ name, color?, secret? }`           | `{ id, token, name }` (**429** over 6 spawns/min/IP, **400** `name taken` or `island is full`) |
