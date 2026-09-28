@@ -67,9 +67,9 @@ releases the camera. Name pills keep a constant on-screen size at any zoom.
 - **Village / Whole island toggle** — close-up street view or full-island overview.
 - **Click any resident** — focus the camera and open a chat. Ask about places,
   other residents, or the island itself.
-- **Island Moment feed** (left column, under the happening card) — emergent story events
-  as agents live their lives
-  ("Wren followed a trail of glowing moths and returned with star sand").
+- **Island Moment feed** (left column, under the happening card) — real sim events
+  (who is actually where, arrivals, weather shifts, conversations) plus a
+  since-last-visit digest from `GET /moments?since=`.
 - **Happening banner** — what's on right now; **Since your last visit** recap.
 - **Toolbar** (right side):
   - Compass — reset the view

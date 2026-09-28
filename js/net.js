@@ -321,7 +321,11 @@
       case 'delta': handleDelta(msg); break;
       case 'chat': handleChat(msg); break;
       case 'story':
-        try { if (msg.text && has(window.UI)) window.UI.feedEvent(String(msg.text), 'ISLAND MOMENT'); } catch (e) {}
+        try {
+          if (msg.text && has(window.UI)) {
+            window.UI.feedEvent(String(msg.text), String(msg.kind || 'island moment').toUpperCase(), { persist: true });
+          }
+        } catch (e) {}
         break;
       case 'clock': applyClock(msg.clock, msg.happening); break;
       case 'join': handleJoin(msg); break;

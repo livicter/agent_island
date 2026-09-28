@@ -327,7 +327,16 @@ function start(engine, opts = {}) {
         return json(res, 200, {
           ok: true,
           agents: engine.order.length,
+          viewers: wss.clients.size,
           uptime: Math.floor((Date.now() - startedAt) / 1000),
+        });
+      }
+      if (req.method === 'GET' && path === '/moments') {
+        const digest = engine.momentsSince(url.searchParams.get('since') || '0');
+        return json(res, 200, {
+          ...digest,
+          agents: engine.order.length,
+          viewers: wss.clients.size,
         });
       }
       if (req.method === 'GET' && path === '/state') {

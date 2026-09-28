@@ -129,9 +129,50 @@
 
   /* ---------------- feed ---------------- */
 
-  function feedEvent(text, tag) {
+  var SEEN_KEY = "dawnbreak-seen-at";
+  var MOMENT_KEY = "dawnbreak-moments";
+
+  function loadMoments() {
+    try {
+      var arr = JSON.parse(localStorage.getItem(MOMENT_KEY) || "[]");
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function rememberMoment(text, tag) {
+    var arr = loadMoments();
+    arr.push({ t: Date.now(), text: String(text), tag: tag || "ISLAND" });
+    if (arr.length > 40) arr = arr.slice(-40);
+    try { localStorage.setItem(MOMENT_KEY, JSON.stringify(arr)); } catch (e) {}
+  }
+
+  function showDigest(moments, summary) {
+    moments = moments || [];
+    if (summary) setRecap(summary);
+    else if (!moments.length) setRecap("Quiet since your last visit. Residents are still out on the sand.");
+    else setRecap(moments.slice(-3).map(function (m) { return m.text; }).join(" "));
+    moments.slice(-2).forEach(function (m) {
+      feedEvent(m.text, String(m.kind || m.tag || "SINCE LAST VISIT").toUpperCase());
+    });
+    try { localStorage.setItem(SEEN_KEY, String(Date.now())); } catch (e) {}
+  }
+
+  function showLocalDigest() {
+    var since = 0;
+    try { since = Number(localStorage.getItem(SEEN_KEY) || 0) || 0; } catch (e) {}
+    var fresh = loadMoments().filter(function (m) { return m && m.t > since; });
+    showDigest(
+      fresh,
+      fresh.length ? null : "Quiet since your last visit. Residents are still out on the sand."
+    );
+  }
+
+  function feedEvent(text, tag, opts) {
     var moments = $("moments");
     if (!moments) return;
+    if (opts && opts.persist) rememberMoment(text, tag);
     var card = el("div", "moment");
     card.appendChild(el("span", "moment-tag", tag || "ISLAND"));
     card.appendChild(el("span", "moment-text", text));
@@ -176,14 +217,12 @@
     if (r) r.textContent = t || "";
   }
 
-  function setWatchers(n) {
+  function setWatchers(n, residents) {
     n = n == null ? 0 : n;
     var w = $("watchers");
     if (w) w.textContent = n + " watching now";
     var v = $("visitors");
-    if (v)
-      v.textContent =
-        (2850 + n * 3).toLocaleString("en-US") + " total visitors";
+    if (v) v.textContent = (residents == null ? n : residents) + " on the island";
   }
 
   /* ---------------- chat ---------------- */
@@ -499,6 +538,8 @@
   window.UI = {
     init: init,
     feedEvent: feedEvent,
+    showDigest: showDigest,
+    showLocalDigest: showLocalDigest,
     setClock: setClock,
     setHappening: setHappening,
     setRecap: setRecap,

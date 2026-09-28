@@ -46,31 +46,33 @@
     return agent;
   }
 
-  function fireStoryEvent() {
+  function nearestPlace(x, z) {
     var ISLE = window.ISLE || {};
-    var templates = ISLE.storyTemplates || [];
-    var names = order.filter(function (id) { return !agents[id].external; })
-      .map(function (id) { return agents[id].name; });
-    if (!templates.length || names.length < 2) return;
-    var a = pick(names);
-    var b = pick(names.filter(function (n) { return n !== a; }));
-    var place = randomPlace();
-    var text = pick(templates)
-      .replace(/\{a\}/g, a)
-      .replace(/\{b\}/g, b)
-      .replace(/\{p\}/g, place ? place.name : 'the shore');
-    if (typeof window.UI !== 'undefined' && window.UI.feedEvent) {
-      try { window.UI.feedEvent(text, 'ISLAND MOMENT'); } catch (e) {}
+    var places = ISLE.places || [];
+    var best = null, dist = Infinity;
+    for (var i = 0; i < places.length; i++) {
+      var d = Math.hypot(x - places[i].x, z - places[i].z);
+      if (d < dist) { dist = d; best = places[i]; }
     }
-    // visual only: participants turn toward the event location
+    return best ? { place: best, dist: dist } : null;
+  }
+
+  function fireStoryEvent() {
+    var ids = order.filter(function (id) { return agents[id] && !agents[id].external; });
+    if (!ids.length) return;
+    var a = agents[pick(ids)];
+    var near = nearestPlace(a.x, a.z);
+    var where = near && near.dist < 10 ? near.place.name : 'the open shore';
+    var doing = a.state === 'walking'
+      ? 'walking toward ' + where
+      : (a.activity || 'idle') + ' near ' + where;
+    var text = a.name + ' is ' + doing + '.';
+    if (typeof window.UI !== 'undefined' && window.UI.feedEvent) {
+      try { window.UI.feedEvent(text, 'ISLAND MOMENT', { persist: true }); } catch (e) {}
+    }
     try {
-      if (place && window.Island && window.Island.faceToward) {
-        [a, b].forEach(function (nm) {
-          for (var i = 0; i < order.length; i++) {
-            var ag = agents[order[i]];
-            if (!ag.external && ag.name === nm) { window.Island.faceToward(order[i], place.x, place.z); break; }
-          }
-        });
+      if (near && near.dist < 12 && window.Island && window.Island.faceToward) {
+        window.Island.faceToward(a.id, near.place.x, near.place.z);
       }
     } catch (e) {}
   }

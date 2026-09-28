@@ -61,15 +61,22 @@
     AgentAPI.init();
     UI.init();
 
-    UI.setWatchers(18);
+    UI.setWatchers(1);
     UI.setHappening(ISLE.happenings[0]);
-    UI.setRecap(
-      "Wren followed a trail of glowing moths and returned with star sand."
-    );
     UI.feedEvent(
-      "Welcome to Dawnbreak. The residents are waking up — click anyone to say hello.",
+      "You are on Dawnbreak. The feed shows what residents are actually doing.",
       "ISLAND"
     );
+    var since = 0;
+    try { since = Number(localStorage.getItem("dawnbreak-seen-at") || 0) || 0; } catch (e) {}
+    var httpBase = resolveServerUrl(param).replace(/^ws/i, "http").replace(/\/$/, "");
+    fetch(httpBase + "/moments?since=" + encodeURIComponent(String(since)))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        UI.showDigest(data.moments || [], data.summary);
+        UI.setWatchers(data.viewers || 1, data.agents);
+      })
+      .catch(function () { UI.showLocalDigest(); });
 
     // Local defaults until the first server 'clock' message arrives; the
     // server owns time/weather from then on.
@@ -120,13 +127,11 @@
     // restore external agents registered earlier
     AgentAPI.restore(Agents);
 
-    UI.setWatchers(18);
+    UI.setWatchers(1, window.Agents && Agents.list ? Agents.list().length : 1);
     UI.setHappening(ISLE.happenings[0]);
-    UI.setRecap(
-      "Wren followed a trail of glowing moths and returned with star sand."
-    );
+    UI.showLocalDigest();
     UI.feedEvent(
-      "Welcome to Dawnbreak. The residents are waking up — click anyone to say hello.",
+      "You are on Dawnbreak. The feed shows what residents are actually doing.",
       "ISLAND"
     );
 

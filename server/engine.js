@@ -272,6 +272,7 @@ class Engine {
     agent.transient = !!transient;
     this.tokens.set(agent.id, token);
     this._systemChat(`${agent.name} arrived on the island.`);
+    this._pushMoment(`${agent.name} arrived on the island.`, { kind: 'visit', a: agent.name });
     this.emit('join', this.publicAgent(agent));
     return { id: agent.id, token, name: agent.name };
   }
@@ -284,6 +285,7 @@ class Engine {
     const idx = this.order.indexOf(id);
     if (idx !== -1) this.order.splice(idx, 1);
     this._systemChat(`${a.name} left the island.`);
+    this._pushMoment(`${a.name} left the island.`, { kind: 'visit', a: a.name });
     this.emit('leave', id);
     return true;
   }
@@ -504,6 +506,9 @@ class Engine {
         },
       });
     });
+    this._pushMoment(`${a.name} and ${b.name} started talking near ${pName}.`, {
+      kind: 'talk', a: a.name, b: b.name, place: pName,
+    });
     return { a: a.name, b: b.name, lines };
   }
 
@@ -560,7 +565,11 @@ class Engine {
     // slow weather drift (real seconds)
     this.weatherTimer -= dt;
     if (this.weatherTimer <= 0) {
-      this.weather = pick(WEATHERS);
+      const next = pick(WEATHERS);
+      if (next !== this.weather) {
+        this.weather = next;
+        this._pushMoment(`The weather shifted to ${this.weather}.`, { kind: 'weather' });
+      }
       this.weatherTimer = rand(300, 540);
     }
 
@@ -572,37 +581,76 @@ class Engine {
     }
   }
 
-  _fireStoryEvent() {
-    const templates = ISLE.storyTemplates || [];
-    const names = this.order
-      .filter((id) => !this.agents[id].external)
-      .map((id) => this.agents[id].name);
-    if (!templates.length || names.length < 2) return null;
-    const a = pick(names);
-    const b = pick(names.filter((n) => n !== a));
-    const place = randomPlace();
-    const placeName = place ? place.name : 'the shore';
-    const text = pick(templates)
-      .replace(/\{a\}/g, a)
-      .replace(/\{b\}/g, b)
-      .replace(/\{p\}/g, placeName);
-    const event = { seq: this.seq++, t: Date.now(), text, a, b, place: placeName };
+  _nearestPlace(x, z) {
+    const places = ISLE.places || [];
+    let best = null;
+    let dist = Infinity;
+    for (const p of places) {
+      const d = Math.hypot(x - p.x, z - p.z);
+      if (d < dist) { dist = d; best = p; }
+    }
+    return best ? { place: best, dist } : null;
+  }
+
+  _pushMoment(text, extra = {}) {
+    const event = {
+      seq: this.seq++,
+      t: Date.now(),
+      text,
+      kind: extra.kind || 'sim',
+      a: extra.a || null,
+      b: extra.b || null,
+      place: extra.place || null,
+    };
     this.storyFeed.push(event);
     if (this.storyFeed.length > STORY_CAP) this.storyFeed.splice(0, this.storyFeed.length - STORY_CAP);
-    // participants turn toward the event location (browser does this visually)
-    if (place) {
-      for (const nm of [a, b]) {
-        for (const id of this.order) {
-          const ag = this.agents[id];
-          if (!ag.external && ag.name === nm) {
-            ag.heading = Math.atan2(place.x - ag.x, place.z - ag.z);
-            break;
-          }
-        }
-      }
-    }
     this.emit('story', event);
     return event;
+  }
+
+  // What this resident is actually doing, not a canned story template.
+  _describePresence(agent) {
+    const near = this._nearestPlace(agent.x, agent.z);
+    const where = near && near.dist < 10 ? near.place.name : 'the open shore';
+    const doing = agent.state === 'walking'
+      ? 'walking toward ' + where
+      : (agent.activity || 'idle') + ' near ' + where;
+    return { text: agent.name + ' is ' + doing + '.', where, near };
+  }
+
+  _fireStoryEvent() {
+    const ids = this.order.filter((id) => this.agents[id] && !this.agents[id].transient);
+    if (!ids.length) return null;
+    const agent = this.agents[pick(ids)];
+    const described = this._describePresence(agent);
+    if (described.near && described.near.dist < 12) {
+      const p = described.near.place;
+      agent.heading = Math.atan2(p.x - agent.x, p.z - agent.z);
+    }
+    return this._pushMoment(described.text, {
+      kind: 'presence', a: agent.name, place: described.where,
+    });
+  }
+
+  momentsSince(sinceRaw) {
+    const since = Number(sinceRaw);
+    const t = Number.isFinite(since) && since > 0 ? since : 0;
+    if (!t) {
+      const recent = this.storyFeed.slice(-1);
+      return {
+        since: 0,
+        moments: recent,
+        summary: recent[0] ? recent[0].text : 'The island is awake.',
+      };
+    }
+    const moments = this.storyFeed.filter((e) => e.t > t);
+    return {
+      since: t,
+      moments,
+      summary: moments.length
+        ? moments.slice(-3).map((e) => e.text).join(' ')
+        : 'Quiet since your last visit. The island kept its own hours.',
+    };
   }
 
   // Rule-based reply. Implementation is js/sim-core.js (also loaded by the browser).
