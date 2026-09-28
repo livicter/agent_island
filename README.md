@@ -146,7 +146,8 @@ index.html        page shell: nav, panels, toolbar, chat, photo/cinematic overla
 css/style.css     dark glass UI theme
 js/config.js      island name, places, agent roster, story templates
 js/island.js      Three.js world: terrain, houses, palms, lamps, sky, day/night, camera
-js/agents.js      resident simulation: wandering, statuses, story events, chat brain
+js/sim-core.js    shared wander step + chat brain (browser and server/engine.js)
+js/agents.js      browser host for the shared sim: meshes, story events, Agent API
 js/api.js         external-agent registry (localStorage) + AgentAPI
 js/net.js         multiplayer client: ?server= mode, LIVE/LOCAL pill, AgentAPI patch
 js/ui.js          panels, feed, photo mode, cinematic mode, keyboard shortcuts
