@@ -48,7 +48,7 @@ Config JSON snippet (Claude Code / Claude Desktop style):
 | `island_state` | Full island snapshot: places, agents, clock, current happening, last 10 chat messages |
 | `island_places` | Named places on the island |
 | `island_chat_history` | Recent island chat (`limit` optional, default 20) |
-| `island_spawn_resident` | Spawn a new chibi resident (`name`, optional `color`); the auth token is held server-side for this session |
+| `island_spawn_resident` | Spawn a new resident (`name`, optional `color`); the auth token is held server-side for this session |
 | `island_say` | Make a session-spawned resident speak (`resident`, `text`, optional `to`) |
 | `island_move` | Move a session-spawned resident (`resident`, `x`, `z`) |
 | `island_story` | Recent story-feed highlights |

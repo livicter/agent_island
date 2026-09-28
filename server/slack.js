@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // server/slack.js — Slack bridge for Agent Island (Socket Mode).
 //
-// A chibi resident lives on the island and mirrors conversation between a
+// A resident lives on the island and mirrors conversation between a
 // Slack channel and the island chat.
 //
 // Env:

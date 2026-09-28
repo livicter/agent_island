@@ -93,11 +93,11 @@
     var c = makeCanvas(256, 72);
     var ctx = c.getContext('2d');
     if (light) {
-      // Moonwake-style: white pill, dark text (for character names / place pills)
-      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      // Tide-ink name pill: dark lagoon ground, cream type.
+      ctx.fillStyle = 'rgba(28,61,58,0.92)';
       roundedPill(ctx, 4, 10, 248, 52, 26);
       ctx.fill();
-      ctx.strokeStyle = 'rgba(30,35,50,0.14)';
+      ctx.strokeStyle = 'rgba(244,239,228,0.45)';
       ctx.lineWidth = 2;
       roundedPill(ctx, 4, 10, 248, 52, 26);
       ctx.stroke();
@@ -113,7 +113,7 @@
     ctx.font = '600 30px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = light ? '#2a3040' : '#ffffff';
+    ctx.fillStyle = light ? '#f4efe4' : '#ffffff';
     ctx.fillText(text, 128, 38);
     var tex = new THREE.CanvasTexture(c);
     tex.anisotropy = 4;
@@ -462,10 +462,15 @@
       p.setY(i, groundHeight(x, z));
     }
     gg.computeVertexNormals();
-    var grass = new THREE.Mesh(gg, new THREE.MeshLambertMaterial({ color: '#d9bd8a', vertexColors: false }));
-    // Moonwake look: sandy base with subtle variation (olive grass comes as scattered blobs)
+    var groundMat = new THREE.MeshLambertMaterial({ color: '#ffffff', vertexColors: false });
+    var groundTex = new THREE.TextureLoader().load('assets/dawnbreak-ground.png');
+    groundTex.wrapS = groundTex.wrapT = THREE.RepeatWrapping;
+    groundTex.repeat.set(7, 7);
+    groundMat.map = groundTex;
+    var grass = new THREE.Mesh(gg, groundMat);
+    // Lagoon sand weave (assets/dawnbreak-ground.png) with reed-green variation.
     var cols = new Float32Array(p.count * 3);
-    var cA = new THREE.Color('#d9bd8a'), cB = new THREE.Color('#cfae7c');
+    var cA = new THREE.Color('#efe2c4'), cB = new THREE.Color('#d5c49a');
     for (var j = 0; j < p.count; j++) {
       var gx = p.getX(j), gz = p.getZ(j);
       var t = 0.5 + 0.5 * Math.sin(gx * 0.35 + gz * 0.5);
@@ -503,27 +508,24 @@
     });
   }
 
-  // Moonwake-style place label: white pill, dark text, "» " prefix.
-  // Like makeLabelSprite(light) but the canvas width is measured from the text,
-  // since makeLabelSprite's fixed 256px canvas clips longer names such as
-  // "» Delphine Roux's place" (~340px at 30px font).
+  // Tide-ink place label. Width follows the text so long names are not clipped.
   function makePlaceLabel(text) {
     var meas = makeCanvas(16, 72).getContext('2d');
     meas.font = '600 30px system-ui, sans-serif';
     var w = Math.ceil(meas.measureText(text).width) + 56;
     var c = makeCanvas(w, 72);
     var ctx = c.getContext('2d');
-    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.fillStyle = 'rgba(28,61,58,0.92)';
     roundedPill(ctx, 4, 10, w - 8, 52, 26);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(30,35,50,0.14)';
+    ctx.strokeStyle = 'rgba(244,239,228,0.45)';
     ctx.lineWidth = 2;
     roundedPill(ctx, 4, 10, w - 8, 52, 26);
     ctx.stroke();
     ctx.font = '600 30px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#2a3040';
+    ctx.fillStyle = '#f4efe4';
     ctx.fillText(text, w / 2, 38);
     var tex = new THREE.CanvasTexture(c);
     tex.anisotropy = 4;
@@ -533,7 +535,7 @@
     return sp;
   }
 
-  // Moonwake-style: small outdoor plaza — round stone patio disc, café tables,
+  // Outdoor plaza — round stone patio disc, café tables,
   // parasol umbrellas, benches, planters. No houses.
   function buildPatio(pl) {
     var g = new THREE.Group();
@@ -657,7 +659,7 @@
     scene.add(g);
 
     // floating white pill label
-    var label = makePlaceLabel('» ' + (pl.name || pl.id || 'Place'));
+    var label = makePlaceLabel('· ' + (pl.name || pl.id || 'Place'));
     label.position.set(pl.x, gy + 6, pl.z);
     scene.add(label);
     labelSprites.push(label);
@@ -694,7 +696,7 @@
     }
   }
 
-  // ---------- cozy cottages (Moonwake night reference: warm glowing windows) ----------
+  // ---------- cottages (warm windows after dusk) ----------
   var cottageWinDay = new THREE.Color('#8d99a4');
   var cottageWinNight = new THREE.Color('#ffd98a');
 
@@ -1094,9 +1096,9 @@
     return best;
   }
 
-  // Moonwake olive-grass: scattered soft flattened blobs, half-sunk in the sand
+  // Reed patches: low flattened blobs on the lagoon sand.
   function scatterGrassBlobs() {
-    var blobCols = [0x7a9a4e, 0x86a854, 0x8fae5a];
+    var blobCols = [0x3f6b52, 0x4e7c5c, 0x2f5a4a];
     var placedPts = [];
     var placed = 0, tries = 0;
     while (placed < 26 && tries < 600) {
@@ -1334,7 +1336,7 @@
     }
     if (!g) g = buildLegacyAgentMesh(colorHex);
 
-    // Moonwake-style white name pill floating above the head
+    // Tide-ink name pill above the head
     var label = makeLabelSprite(name || id, 0.72, true);
     label.position.y = 2.9;
     g.add(label);
@@ -1646,8 +1648,8 @@
           // don't freeze mid-blink when a walk starts
           if (a.blinkOn > 0) {
             a.blinkOn = 0;
-            if (ud.eyeL) ud.eyeL.scale.y = 1;
-            if (ud.eyeR) ud.eyeR.scale.y = 1;
+            if (ud.eyeL) ud.eyeL.scale.y = ud.eyeRestY || 1;
+            if (ud.eyeR) ud.eyeR.scale.y = ud.eyeRestY || 1;
           }
         } else {
           // ease limbs and body tilt back to rest
@@ -1670,7 +1672,7 @@
             a.blinkT -= dt;
             if (a.blinkT <= 0) { a.blinkOn = 0.12; a.blinkT = 1 + Math.random() * 3; }
             if (a.blinkOn > 0) a.blinkOn -= dt;
-            var eyeSY = a.blinkOn > 0 ? 0.12 : 1;
+            var eyeSY = a.blinkOn > 0 ? 0.12 : (ud.eyeRestY || 1);
             if (ud.eyeL) ud.eyeL.scale.y = eyeSY;
             if (ud.eyeR) ud.eyeR.scale.y = eyeSY;
           }
@@ -1729,7 +1731,7 @@
         }
       })(aidList[ai]);
 
-      // Moonwake-style: name pills keep a constant screen size at any zoom
+      // Name pills keep a constant screen size at any zoom
       var _a2 = agents[aidList[ai]];
       if (_a2 && _a2.label) {
         var _ldx = camera.position.x - _a2.group.position.x,
