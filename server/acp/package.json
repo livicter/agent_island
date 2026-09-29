@@ -1,0 +1,23 @@
+{
+  "name": "agent-island-acp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ACP v1 agent that drives the Agent Island HTTP engine. Preferred path for new island agents; server/mcp.js stays transitional.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.smoke.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.smoke.json --noEmit",
+    "smoke": "node dist/smoke/visit.js"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.5.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.0",
+    "typescript": "5.9.3"
+  }
+}
