@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "smoke",
+    "outDir": "dist/smoke"
+  },
+  "include": ["smoke/**/*.ts"]
+}
